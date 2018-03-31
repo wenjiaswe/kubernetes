@@ -57,13 +57,20 @@ var (
 
 type eventLoadOpts struct {
 	numSites int
+	startInterval int64
 	kubeConfig string
 	image string
+}
+
+type resultMessage struct {
+	success bool
+	err error
 }
 
 func main() {
 	flags := eventLoadCmd.Flags()
 	flags.IntVar(&opts.numSites, "numSites", 2, "number of sites to create in the test")
+	flags.Int64Var(&opts.startInterval, "startInterval", 30, "seconds between starting customer sites")
 	flags.StringVar(&opts.kubeConfig, "kubeconfig", "", "absolute path to the kubeconfig file")
 	flags.StringVar(&opts.image, "image", "gcr.io/wfender-test/tomcat-amd64:1522278020", "primary docker image")
 	eventLoadCmd.Execute()
@@ -88,18 +95,26 @@ func runEventLoad() {
 		os.Exit(1)
 	}
 
+	channels := make([]chan resultMessage, opts.numSites)
 	for i := 0; i < opts.numSites; i++ {
-		err = createTestSite(clientset, i)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+		channels[i] = make(chan resultMessage)
+		go createTestSite(channels[i], clientset, i)
+		time.Sleep(time.Duration(opts.startInterval) * time.Second)
+	}
+
+	for i := 0; i < opts.numSites; i++ {
+		result := <- channels[i]
+		if result.success {
+			fmt.Printf("Test site %d succeeded!\r\n ", i)
+		} else {
+			fmt.Printf("Test site %d failed with error %v!\r\n", i, result.err)
 		}
 	}
 
-	fmt.Println("Test succeeded!")
+	fmt.Println("Test finished")
 }
 
-func createTestSite(clientset *kubernetes.Clientset, index int) (error) {
+func createTestSite(result chan resultMessage, clientset *kubernetes.Clientset, index int) {
 	namespace := fmt.Sprintf("site-ns-%d", index)
 	site := fmt.Sprintf("site-%d", index)
 	secret := fmt.Sprintf("%s-secret", site)
@@ -108,65 +123,67 @@ func createTestSite(clientset *kubernetes.Clientset, index int) (error) {
 	volume := fmt.Sprintf("%s-%s.www", deployment, namespace)
 	err := initNamespace(clientset, namespace)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	err = initSecret(clientset, namespace, secret)
 	if err != nil {
-		return err
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	err = initNetworkPolicy(clientset, namespace, "inbound")
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	err = initPersistentVolume(clientset, volume)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	err = initPersistentVolumeClaim(clientset, namespace, volume)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	err = initDeployment(clientset, namespace, deployment, site, opts.image, secret)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	err = initService(clientset, namespace, service, site)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	err = initIngress(clientset, namespace, deployment, site)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 
 	ok, err := verifyEndpoints(clientset, namespace, service, 2)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	if !ok {
 		fmt.Println("Unable to find endpoints for your service!")
 	}
 	ok, err = verifyPods(clientset, namespace, 2)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	if !ok {
-		fmt.Println("Unable to find pods for your service!")
+		result <- resultMessage{success: false, err: errors.New("Unable to find pods for your service!")}
+		return
 	}
 
 	ip, err := getServiceIP(clientset, namespace, service)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 
 	// glog.Info("About to run test")
@@ -174,11 +191,11 @@ func createTestSite(clientset *kubernetes.Clientset, index int) (error) {
 	tomcaturl := fmt.Sprintf("http://%s/sample/", ip)
 	err = verifyHttpEndpoint(tomcaturl)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		result <- resultMessage{success: false, err: err}
+		return
 	}
 	fmt.Printf("Request to %s succeeded!!\r\n", tomcaturl)
-	return nil
+	result <- resultMessage{success: true, err: nil}
 }
 
 // validateOptions will actually validate the inputs.
