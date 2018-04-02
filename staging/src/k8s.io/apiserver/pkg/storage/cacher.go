@@ -888,15 +888,6 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 		watchEvent = watch.Event{Type: watch.Deleted, Object: oldObj}
 	}
 
-	// SWAT Event lost: print out resourceVersion, EventType and event object name
-	// if event is for a pod or a node
-	meta, err := meta.Accessor(watchEvent.Object)
-	if err != nil {
-		return
-	}
-	fmt.Printf("SWAT,cacher/sendWatchCacheEvent,%s,%s,%s\n",
-		watchEvent.Type, meta.GetName(), meta.GetResourceVersion())
-
 	// We need to ensure that if we put event X to the c.result, all
 	// previous events were already put into it before, no matter whether
 	// c.done is close or not.

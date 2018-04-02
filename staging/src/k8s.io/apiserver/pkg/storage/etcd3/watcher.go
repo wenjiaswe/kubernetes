@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/value"
-	"k8s.io/apimachinery/pkg/api/meta"
 
 	"github.com/coreos/etcd/clientv3"
 	"github.com/golang/glog"
@@ -236,14 +235,6 @@ func (wc *watchChan) processEvent(wg *sync.WaitGroup) {
 				glog.Warningf("Fast watcher, slow processing. Number of buffered events: %d."+
 					"Probably caused by slow dispatching events to watchers", outgoingBufSize)
 			}
-			// SWAT Event lost: print out resourceVersion, EventType and event object name
-			// if event is for a pod or a node
-			meta, err := meta.Accessor(res.Object)
-			if err != nil {
-				return
-			}
-			fmt.Printf("SWAT,etcd3/watcher/processEvent,%s,%s,%s\n",
-				res.Type, meta.GetName(), meta.GetResourceVersion())
 			// If user couldn't receive results fast enough, we also block incoming events from watcher.
 			// Because storing events in local will cause more memory usage.
 			// The worst case would be closing the fast watcher.
@@ -277,25 +268,6 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 		glog.Errorf("failed to prepare current and previous objects: %v", err)
 		wc.sendError(err)
 		return nil
-	}
-
-	// SWAT Event lost: print out resourceVersion, EventType and event object name
-	// if event is for a pod or a node
-	if curObj != nil {
-		metaCur, err := meta.Accessor(curObj)
-		if err == nil {
-			fmt.Printf("SWAT,etcd3/watcher/transform/curObj,,%s,%s\n",
-				metaCur.GetName(), metaCur.GetResourceVersion())
-		}
-	}
-
-
-	if oldObj != nil {
-		metaOld, err := meta.Accessor(oldObj)
-		if err == nil{
-			fmt.Printf("SWAT,etcd3/watcher/transform/oldObj,,%s,%s\n",
-				metaOld.GetName(), metaOld.GetResourceVersion())
-		}
 	}
 
 	switch {
