@@ -160,54 +160,55 @@ func newWatchCache(
 
 // Add takes runtime.Object as an argument.
 func (w *watchCache) Add(obj interface{}) error {
-	object, resourceVersion, err := objectToVersionedRuntimeObject(obj)
+	object, resourceVersion, name, err := objectToVersionedRuntimeObject(obj)
 	if err != nil {
 		return err
 	}
 	event := watch.Event{Type: watch.Added, Object: object}
 
 	f := func(elem *storeElement) error { return w.store.Add(elem) }
-	return w.processEvent(event, resourceVersion, f)
+	return w.processEvent(event, resourceVersion, name, f)
 }
 
 // Update takes runtime.Object as an argument.
 func (w *watchCache) Update(obj interface{}) error {
-	object, resourceVersion, err := objectToVersionedRuntimeObject(obj)
+	object, resourceVersion, name, err := objectToVersionedRuntimeObject(obj)
 	if err != nil {
 		return err
 	}
 	event := watch.Event{Type: watch.Modified, Object: object}
 
 	f := func(elem *storeElement) error { return w.store.Update(elem) }
-	return w.processEvent(event, resourceVersion, f)
+	return w.processEvent(event, resourceVersion, name, f)
 }
 
 // Delete takes runtime.Object as an argument.
 func (w *watchCache) Delete(obj interface{}) error {
-	object, resourceVersion, err := objectToVersionedRuntimeObject(obj)
+	object, resourceVersion, name, err := objectToVersionedRuntimeObject(obj)
 	if err != nil {
 		return err
 	}
 	event := watch.Event{Type: watch.Deleted, Object: object}
 
 	f := func(elem *storeElement) error { return w.store.Delete(elem) }
-	return w.processEvent(event, resourceVersion, f)
+	return w.processEvent(event, resourceVersion, name, f)
 }
 
-func objectToVersionedRuntimeObject(obj interface{}) (runtime.Object, uint64, error) {
+func objectToVersionedRuntimeObject(obj interface{}) (runtime.Object, uint64, string, error) {
 	object, ok := obj.(runtime.Object)
 	if !ok {
-		return nil, 0, fmt.Errorf("obj does not implement runtime.Object interface: %v", obj)
+		return nil, 0, "", fmt.Errorf("obj does not implement runtime.Object interface: %v", obj)
 	}
 	meta, err := meta.Accessor(object)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 	resourceVersion, err := parseResourceVersion(meta.GetResourceVersion())
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
-	return object, resourceVersion, nil
+	name := meta.GetName()
+	return object, resourceVersion, name, nil
 }
 
 func parseResourceVersion(resourceVersion string) (uint64, error) {
@@ -218,7 +219,7 @@ func parseResourceVersion(resourceVersion string) (uint64, error) {
 	return strconv.ParseUint(resourceVersion, 10, 0)
 }
 
-func (w *watchCache) processEvent(event watch.Event, resourceVersion uint64, updateFunc func(*storeElement) error) error {
+func (w *watchCache) processEvent(event watch.Event, resourceVersion uint64, name string, updateFunc func(*storeElement) error) error {
 	key, err := w.keyFunc(event.Object)
 	if err != nil {
 		return fmt.Errorf("couldn't compute key: %v", err)
@@ -228,6 +229,11 @@ func (w *watchCache) processEvent(event watch.Event, resourceVersion uint64, upd
 	if err != nil {
 		return err
 	}
+
+	// SWAT Event lost: print out resourceVersion, EventType and event object name
+	// if event is for a pod or a node
+	fmt.Printf("SWAT,watch_cache/processEvent,%s,%s,%d\n",
+		event.Type, name, resourceVersion)
 
 	watchCacheEvent := &watchCacheEvent{
 		Type:             event.Type,
