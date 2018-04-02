@@ -612,6 +612,15 @@ func (c *Cacher) dispatchEvent(event *watchCacheEvent) {
 
 	c.Lock()
 	defer c.Unlock()
+
+	// eventTracker Event lost: print out resourceVersion, EventType and event object name
+	meta, err := meta.Accessor(event.Object)
+	if err != nil {
+		glog.Errorf("unexpected eventTracker error: %v", err)
+	}else{
+		fmt.Printf("eventTracker,cacher/dispatchEvent,%s,%s,%s,%s,%s,%s\n",
+			time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion())
+	}
 	// Iterate over "allWatchers" no matter what the trigger function is.
 	for _, watcher := range c.watchers.allWatchers {
 		watcher.add(event, c.dispatchTimeoutBudget)
@@ -887,15 +896,6 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 		}
 		watchEvent = watch.Event{Type: watch.Deleted, Object: oldObj}
 	}
-
-	// SWAT Event lost: print out resourceVersion, EventType and event object name
-	// if event is for a pod or a node
-	meta, err := meta.Accessor(watchEvent.Object)
-	if err != nil {
-		return
-	}
-	fmt.Printf("SWAT,cacher/sendWatchCacheEvent,%s,%s,%s\n",
-		watchEvent.Type, meta.GetName(), meta.GetResourceVersion())
 
 	// We need to ensure that if we put event X to the c.result, all
 	// previous events were already put into it before, no matter whether

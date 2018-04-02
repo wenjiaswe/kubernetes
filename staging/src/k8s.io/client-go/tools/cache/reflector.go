@@ -392,10 +392,9 @@ loop:
 				continue
 			}
 			newResourceVersion := meta.GetResourceVersion()
-			// SWAT Event lost: print out resourceVersion, EventType and event object name
-			// if event is for a pod or a node
-			fmt.Printf("SWAT,reflector/watchHandler,%s,%s,%s\n",
-				event.Type, meta.GetName(), newResourceVersion)
+			// eventTracker Event lost: print out resourceVersion, EventType and event object name
+			fmt.Printf("eventTracker,reflector/watchHandler/(caller:%s),%s,%s,%s,%s,%s,%s\n",
+				r.name, time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), newResourceVersion)
 			switch event.Type {
 			case watch.Added:
 				err := r.store.Add(event.Object)

@@ -25,15 +25,16 @@ var rvLists [][]string
 
 func main() {
 	fmt.Println(message)
-	logDir := flag.String("log-dir", "./testlogs", "directory of the log files")
-	eventKey := flag.String("event-key", "", "key of the interested event")
+	logDir := flag.String("log-dir", "/tmp", "directory of the log files")
 	baseList := flag.String("base-list", "", "base list that you want to compare with (choose one from above)")
 	flag.Parse()
 
+	compareEventsResourceVersion(*logDir, *baseList)
+}
 
-	//base := flag.Args()[0]
+func compareEventsResourceVersion(logDir string, baseList string){
 	var baseNum int
-	switch strings.ToUpper(*baseList){
+	switch strings.ToUpper(baseList){
 	case "ETCD":
 		baseNum = 0
 	case "OUTETCD":
@@ -50,41 +51,55 @@ func main() {
 		baseNum = 0
 	}
 
-	rvLists = make([][]string, 6)
-
-	readLogsAndFillRVLists4APIServer(*logDir, *eventKey)
-	readLogsAndFillRVLists4Client(*logDir, *eventKey)
-
-	for _, rvList := range rvLists{
-		sort.Strings(rvList)
-		fmt.Println(rvList)
+	apiLogEntries, err := readLogs(logDir, "/kube-apiserver.log")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
-	compareLists(baseNum)
+
+	schedulerLogEntries, err := readLogs(logDir, "/kube-scheduler.log")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	controllerManagerLogEntries, err := readLogs(logDir, "/kube-controller-manager.log")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	podCnt, podsList := getPodsList(apiLogEntries)
+	falsePodsCnt := 0
+
+	fmt.Printf("Checking resourceVersion of event for each pod...\n")
+
+	for _, podName := range podsList {
+		rvLists = make([][]string, 6)
+		fillRVList4APIServer(apiLogEntries, rvLists, podName)
+		fillRVList4Client(schedulerLogEntries, rvLists, 4, podName)
+		fillRVList4Client(controllerManagerLogEntries, rvLists, 5, podName)
+		if !compareLists(baseNum, podName) {
+			falsePodsCnt ++
+		}
+	}
+
+	//for _, rvList := range rvLists{
+	//	sort.Strings(rvList)
+	//	fmt.Println(rvList)
+	//}
+	fmt.Printf("\n%d out of %d pods have problem!\n", falsePodsCnt, podCnt)
 }
 
-func readLogsAndFillRVLists4APIServer(logDir string, eventKey string){
-	logEntries, err := readLines(logDir + "/kube-apiserver.log")
+func readLogs(logDir string, logName string) ([]string, error) {
+	fmt.Printf("Reading %s...\n", logName)
+	logEntries, err := readLines(logDir + logName)
 	if err != nil {
 		log.Fatalf("Failed reading lines: %v", err)
 	}
-	fillRVList4APIServer(logEntries, rvLists, eventKey)
+	return logEntries, err
 }
 
-func readLogsAndFillRVLists4Client(logDir string, eventKey string){
-	sLogEntries, err := readLines(logDir + "/kube-scheduler.log")
-	if err != nil {
-		log.Fatalf("Failed reading lines: %v", err)
-	}
-	fillRVList4Client(sLogEntries, rvLists, 4, eventKey)
-
-	cmLogEntries, err := readLines(logDir + "/kube-controller-manager.log")
-	if err != nil {
-		log.Fatalf("Failed reading lines: %v", err)
-	}
-	fillRVList4Client(cmLogEntries, rvLists, 5, eventKey)
-}
-// readLines reads a whole file into memory
-// and returns a slice of its lines.
 func readLines(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -100,13 +115,33 @@ func readLines(path string) ([]string, error) {
 	return lines, scanner.Err()
 }
 
+func getPodsList(apiLogEntries []string) (int, []string) {
+	fmt.Printf("\nGeting pods list...\n")
+	var pods []string
+	podCnt := 0
+	for _, line := range apiLogEntries {
+		result := strings.Split(line, ",")
+		eyeCatcher := result[0]
+		if ( eyeCatcher == "eventTracker" ){
+			loc := result[1]
+			objName := result[5]
+			reflectType := result[6]
+			if (loc == "watch_cache/processEvent") && ( reflectType == "*core.Pod") {
+				pods = append(pods, objName)
+				podCnt ++
+			}
+		}
+	}
+	return podCnt, pods
+}
+
 // writeLines writes the lines to the given file.
 func fillRVList4APIServer(lines []string, rvLists [][]string, eventKey string) {
 	for _, line := range lines {
 		result := strings.Split(line, ",")
 		eyeCatcher := result[0]
-		if ( eyeCatcher == "SWAT" ) && ( eventKey == "" || result[3] == eventKey){
-			rvStr := result[4]
+		if ( eyeCatcher == "eventTracker" ) && ( eventKey == "" || result[5] == eventKey){
+			rvStr := result[7]
 			switch result[1] {
 			case "etcd3/watcher/transform/curObj", "etcd3/watcher/transform/oldObj":
 				if sort.SearchStrings(rvLists[0], rvStr) == len(rvLists[0]) {
@@ -116,11 +151,11 @@ func fillRVList4APIServer(lines []string, rvLists [][]string, eventKey string) {
 				rvLists[1] = append(rvLists[1], rvStr)
 			case "watch_cache/processEvent":
 				rvLists[2] = append(rvLists[2], rvStr)
-			case "cacher/sendWatchCacheEvent":
+			case "cacher/dispatchEvent":
 				if sort.SearchStrings(rvLists[3], rvStr) == len(rvLists[3]) {
 					rvLists[3] = append(rvLists[3], rvStr)
 				}
-			case "reflector/watchHandler":
+			//case "reflector/watchHandler":
 			//	if sort.SearchStrings(rvLists[4], rvStr) == len(rvLists[4]) {
 			//		rvLists[4] = append(rvLists[4], rvStr)
 			//	}
@@ -135,15 +170,13 @@ func fillRVList4Client(lines []string, rvLists [][]string, listNum int, eventKey
 	for _, line := range lines {
 		result := strings.Split(line, ",")
 		eyeCatcher := result[0]
-		if ( eyeCatcher == "SWAT" ) && ( eventKey == "" || result[3] == eventKey){
-			rvStr := result[4]
-			switch result[1] {
-			case "reflector/watchHandler":
+		if ( eyeCatcher == "eventTracker" ) && ( eventKey == "" || result[5] == eventKey){
+			rvStr := result[7]
+			if strings.HasPrefix(result[1], "reflector/watchHandler") {
 				if sort.SearchStrings(rvLists[listNum], rvStr) == len(rvLists[listNum]) {
 					rvLists[listNum] = append(rvLists[listNum], rvStr)
 				}
-				break
-			default:
+			}else{
 				fmt.Println(line)
 			}
 		}
@@ -151,22 +184,20 @@ func fillRVList4Client(lines []string, rvLists [][]string, listNum int, eventKey
 	return
 }
 
-func compareLists(baseNum int){
+func compareLists(baseNum int, podName string) bool {
+	result := true
 	baseList := rvLists[baseNum]
 	for i := 0; i < 6; i++ {
 		if i == baseNum {
 			continue
 		}
-		fmt.Printf("\nComparing base list %d and current list %d\n", baseNum, i)
-		isSame := compareWithBase(baseList, rvLists[i])
-		switch isSame {
-		case false:
+		if !compareWithBase(baseList, rvLists[i]) {
 			fmt.Printf("OUCH!!! List %d is DIFFERENT from base list\n", i)
-		case true:
-			fmt.Printf("Fine~ List %d is same as base list\n", i)
+			result = false
 		}
 	}
-	fmt.Println("\nDone comparing")
+	//fmt.Printf("%s, ", podName)
+	return result
 }
 
 func compareWithBase(baseRvList []string, currRvList []string) bool{
