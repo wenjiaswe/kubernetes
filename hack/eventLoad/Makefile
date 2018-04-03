@@ -20,6 +20,7 @@ IMAGE ?= $(shell docker image ls | egrep "${PROJECT}/tomcat" | sort +2 -3 | tail
 
 bin/eventLoad: eventLoad.go
 	go build -o bin/eventLoad eventLoad.go
+	go build -o bin/eventCheck eventCheck.go
 
 build/version.txt: setup
 	@date +%s > build/version.txt
