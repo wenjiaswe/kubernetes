@@ -983,7 +983,7 @@ func initService(clientset *kubernetes.Clientset, namespace string, name string,
 				"site": site,
 			},
 			SessionAffinity: corev1.ServiceAffinityNone,
-			Type:            corev1.ServiceTypeClusterIP,
+			Type:            corev1.ServiceTypeNodePort,
 		},
 	})
 	if err != nil {
@@ -1044,30 +1044,9 @@ func initIngress(clientset *kubernetes.Clientset, namespace string, name string,
 			Name: name,
 		},
 		Spec: extv1beta1.IngressSpec{
-			Rules: []extv1beta1.IngressRule{
-				{
-					Host: "localhost",
-					IngressRuleValue: extv1beta1.IngressRuleValue{
-						HTTP: &extv1beta1.HTTPIngressRuleValue {
-							Paths: []extv1beta1.HTTPIngressPath {
-								{
-									Backend: extv1beta1.IngressBackend {
-										ServiceName: "tomcat",
-										ServicePort: intstr.FromInt(80),
-									},
-									Path: "/",
-								},
-							},
-						},
-					},
-				},
-			},
-			TLS: []extv1beta1.IngressTLS {
-				{
-					Hosts: []string {
-						"localhost",
-					},
-				},
+			Backend: &extv1beta1.IngressBackend{
+				ServiceName: "tomcat",
+				ServicePort: intstr.FromInt(80),
 			},
 		},
 	})
