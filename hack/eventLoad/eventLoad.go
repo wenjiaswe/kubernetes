@@ -57,13 +57,45 @@ var (
 
 type eventLoadOpts struct {
 	numSites int
+	concurrentSites int
+	startInterval int64
 	kubeConfig string
 	image string
 }
 
+type resultMessage struct {
+	success bool
+	err error
+}
+
+type command string
+
+const (
+	Test command = "Test"
+	TearDown command = "TearDown"
+)
+
+type site struct {
+	namespace string
+	site string
+	secret string
+	deployment string
+	service string
+	volume string
+}
+
+type testSite struct {
+	resultChannel chan resultMessage
+	commandChannel chan command
+	id int
+	running bool
+}
+
 func main() {
 	flags := eventLoadCmd.Flags()
-	flags.IntVar(&opts.numSites, "numSites", 2, "number of sites to create in the test")
+	flags.IntVar(&opts.numSites, "numSites", 10, "number of sites to create during the test")
+	flags.IntVar(&opts.concurrentSites, "concurrentSites", 3, "number of concurrent sites allowed in the test")
+	flags.Int64Var(&opts.startInterval, "startInterval", 30, "seconds between starting customer sites")
 	flags.StringVar(&opts.kubeConfig, "kubeconfig", "", "absolute path to the kubeconfig file")
 	flags.StringVar(&opts.image, "image", "gcr.io/wfender-test/tomcat-amd64:1522278020", "primary docker image")
 	eventLoadCmd.Execute()
@@ -88,96 +120,178 @@ func runEventLoad() {
 		os.Exit(1)
 	}
 
-	for i := 0; i < opts.numSites; i++ {
-		err = createTestSite(clientset, i)
+	testSites := make([]testSite, opts.concurrentSites)
+	for id := 0; id < opts.numSites; id++ {
+		index := id % opts.concurrentSites
+		if testSites[index].running {
+			testSites[index].commandChannel <- TearDown
+			result := <- testSites[index].resultChannel
+			if result.success {
+				fmt.Printf("Test site %d succeeded!\r\n ", testSites[index].id)
+			} else {
+				fmt.Printf("Test site %d failed with error %v!\r\n", testSites[index].id, result.err)
+			}
+		}
+		testSites[index].resultChannel = make(chan resultMessage)
+		testSites[index].commandChannel = make(chan command)
+		testSites[index].id = id
+		testSites[index].running = true
+		go runTestSite(testSites[index].commandChannel, testSites[index].resultChannel, clientset, testSites[index].id)
+		time.Sleep(time.Duration(opts.startInterval) * time.Second)
+	}
+
+	for index := 0; index < opts.concurrentSites; index++ {
+		testSites[index].commandChannel <- TearDown
+		result := <- testSites[index].resultChannel
+		if result.success {
+			fmt.Printf("Test site %d succeeded!\r\n ", testSites[index].id)
+		} else {
+			fmt.Printf("Test site %d failed with error %v!\r\n", testSites[index].id, result.err)
+		}
+		testSites[index].running = false
+	}
+
+	fmt.Println("Test finished")
+}
+
+func runTestSite(requestMessage chan command, result chan resultMessage, clientset *kubernetes.Clientset, index int) {
+	namespace := fmt.Sprintf("site-ns-%d", index)
+	siteName := fmt.Sprintf("site-%d", index)
+	secret := fmt.Sprintf("%s-secret", siteName)
+	deployment := fmt.Sprintf("cust-%s", siteName)
+	service := fmt.Sprintf("%s-%s-tomcat", namespace, siteName)
+	volume := fmt.Sprintf("%s-%s.www", deployment, namespace)
+
+	siteInfo := site {
+		namespace: namespace,
+		site: siteName,
+		secret: secret,
+		deployment: deployment,
+		service: service,
+		volume: volume,
+	}
+	err := createTestSite(clientset, siteInfo)
+	if err != nil {
+		result <- resultMessage{success: false, err: err}
+		return
+	}
+
+	cmd := Test
+	for cmd != TearDown {
+		ip, err := getServiceIP(clientset, siteInfo.namespace, siteInfo.service)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			result <- resultMessage{success: false, err: err}
+			return
+		}
+		tomcaturl := fmt.Sprintf("http://%s/sample/", ip)
+		err = verifyHttpEndpoint(tomcaturl)
+		if err != nil {
+			result <- resultMessage{success: false, err: err}
+			return
+		}
+		fmt.Printf("Request to %s succeeded!!\r\n", tomcaturl)
+		select {
+			case cmd = <-requestMessage:
+				fmt.Printf("Received command %v for test site %d.\r\n", cmd, index)
+			default:
+				time.Sleep(time.Duration(1) * time.Second)
 		}
 	}
 
-	fmt.Println("Test succeeded!")
+	err = tearDownSite(clientset, siteInfo)
+	if err != nil {
+		result <- resultMessage{success: false, err: err}
+		return
+	}
+
+	result <- resultMessage{success: true, err: nil}
 }
 
-func createTestSite(clientset *kubernetes.Clientset, index int) (error) {
-	namespace := fmt.Sprintf("site-ns-%d", index)
-	site := fmt.Sprintf("site-%d", index)
-	secret := fmt.Sprintf("%s-secret", site)
-	deployment := fmt.Sprintf("cust-%s", site)
-	service := fmt.Sprintf("%s-%s-tomcat", namespace, site)
-	volume := fmt.Sprintf("%s-%s.www", deployment, namespace)
-	err := initNamespace(clientset, namespace)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	err = initSecret(clientset, namespace, secret)
+func createTestSite(clientset *kubernetes.Clientset, siteInfo site) error {
+	err := initNamespace(clientset, siteInfo.namespace)
 	if err != nil {
 		return err
 	}
-	err = initNetworkPolicy(clientset, namespace, "inbound")
+	err = initSecret(clientset, siteInfo.namespace, siteInfo.secret)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
-	err = initPersistentVolume(clientset, volume)
+	err = initNetworkPolicy(clientset, siteInfo.namespace, "inbound")
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
-	err = initPersistentVolumeClaim(clientset, namespace, volume)
+	err = initPersistentVolume(clientset, siteInfo.volume)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
-	err = initDeployment(clientset, namespace, deployment, site, opts.image, secret)
+	err = initPersistentVolumeClaim(clientset, siteInfo.namespace, siteInfo.volume)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
-	err = initService(clientset, namespace, service, site)
+	err = initDeployment(clientset, siteInfo.namespace, siteInfo.deployment, siteInfo.site, opts.image, siteInfo.secret)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
-	err = initIngress(clientset, namespace, deployment, site)
+	err = initService(clientset, siteInfo.namespace, siteInfo.service, siteInfo.site)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
+	}
+	err = initIngress(clientset, siteInfo.namespace, siteInfo.deployment, siteInfo.site)
+	if err != nil {
+		return err
 	}
 
-	ok, err := verifyEndpoints(clientset, namespace, service, 2)
+	ok, err := verifyPods(clientset, siteInfo.namespace, 2)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 	if !ok {
-		fmt.Println("Unable to find endpoints for your service!")
+		return errors.New("Unable to find pods for your service!")
 	}
-	ok, err = verifyPods(clientset, namespace, 2)
+	ok, err = verifyEndpoints(clientset, siteInfo.namespace, siteInfo.service, 2)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 	if !ok {
-		fmt.Println("Unable to find pods for your service!")
+		return errors.New("Unable to find endpoints for your service!")
+	}
+	return nil
+}
+
+func tearDownSite(clientset *kubernetes.Clientset, siteInfo site) error {
+	err := deleteIngress(clientset, siteInfo.namespace, siteInfo.deployment, siteInfo.site)
+	if err != nil {
+		return err
+	}
+	err = deleteService(clientset, siteInfo.namespace, siteInfo.service, siteInfo.site)
+	if err != nil {
+		return err
+	}
+	err = deleteDeployment(clientset, siteInfo.namespace, siteInfo.deployment, siteInfo.site, opts.image, siteInfo.secret)
+	if err != nil {
+		return err
+	}
+	err = deletePersistentVolumeClaim(clientset, siteInfo.namespace, siteInfo.volume)
+	if err != nil {
+		return err
+	}
+	err = deletePersistentVolume(clientset, siteInfo.volume)
+	if err != nil {
+		return err
+	}
+	err = deleteNetworkPolicy(clientset, siteInfo.namespace, "inbound")
+	if err != nil {
+		return err
+	}
+	err = deleteSecret(clientset, siteInfo.namespace, siteInfo.secret)
+	if err != nil {
+		return err
+	}
+	err = deleteNamespace(clientset, siteInfo.namespace)
+	if err != nil {
+		return err
 	}
 
-	ip, err := getServiceIP(clientset, namespace, service)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	// glog.Info("About to run test")
-	fmt.Println("About to run test")
-	tomcaturl := fmt.Sprintf("http://%s/sample/", ip)
-	err = verifyHttpEndpoint(tomcaturl)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	fmt.Printf("Request to %s succeeded!!\r\n", tomcaturl)
 	return nil
 }
 
@@ -321,6 +435,34 @@ func initNamespace(clientset *kubernetes.Clientset, namespace string) error {
 	return nil
 }
 
+func deleteNamespace(clientset *kubernetes.Clientset, namespace string) error {
+	err := clientset.CoreV1().Namespaces().Delete(namespace, &metav1.DeleteOptions{})
+	if err != nil {
+		se, ok := err.(*apierrors.StatusError)
+		if !ok {
+			return err
+		}
+		if se.Status().Reason != metav1.StatusReasonNotFound {
+			return err
+		}
+		// Apparently the Ingress was already deleted, ignoring.
+		return nil
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(namespace, metav1.GetOptions{})
+	if err == nil {
+		errors.New(fmt.Sprintf("failed to delete namespace %s, namespace has status %v", namespace, ns.Status))
+	}
+	se, ok := err.(*apierrors.StatusError)
+	if !ok {
+		return err
+	}
+	if se.Status().Reason != metav1.StatusReasonNotFound {
+		return err
+	}
+	return nil
+}
+
 func initSecret(clientset *kubernetes.Clientset, namespace string, name string) error {
 	_, err := clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
@@ -350,6 +492,34 @@ func initSecret(clientset *kubernetes.Clientset, namespace string, name string) 
 
 	_, err = clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteSecret(clientset *kubernetes.Clientset, namespace string, name string) error {
+	err := clientset.CoreV1().Secrets(namespace).Delete(name, &metav1.DeleteOptions{})
+	if err != nil {
+		se, ok := err.(*apierrors.StatusError)
+		if !ok {
+			return err
+		}
+		if se.Status().Reason != metav1.StatusReasonNotFound {
+			return err
+		}
+		// Apparently the Secret was already deleted, ignoring.
+		return nil
+	}
+
+	s, err := clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
+	if err == nil {
+		errors.New(fmt.Sprintf("failed to delete secret %s, secret has metadata %v", name, s.GetObjectMeta()))
+	}
+	se, ok := err.(*apierrors.StatusError)
+	if !ok {
+		return err
+	}
+	if se.Status().Reason != metav1.StatusReasonNotFound {
 		return err
 	}
 	return nil
@@ -401,6 +571,34 @@ func initNetworkPolicy(clientset *kubernetes.Clientset, namespace string, name s
 
 	_, err = clientset.NetworkingV1().NetworkPolicies(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteNetworkPolicy(clientset *kubernetes.Clientset, namespace string, name string) error {
+	err := clientset.NetworkingV1().NetworkPolicies(namespace).Delete(name, &metav1.DeleteOptions{})
+	if err != nil {
+		se, ok := err.(*apierrors.StatusError)
+		if !ok {
+			return err
+		}
+		if se.Status().Reason != metav1.StatusReasonNotFound {
+			return err
+		}
+		// Apparently the Network Policy was already deleted, ignoring.
+		return nil
+	}
+
+	np, err := clientset.NetworkingV1().NetworkPolicies(namespace).Get(name, metav1.GetOptions{})
+	if err == nil {
+		errors.New(fmt.Sprintf("failed to delete network policy %s, network policy has metadata %v", name, np.GetObjectMeta()))
+	}
+	se, ok := err.(*apierrors.StatusError)
+	if !ok {
+		return err
+	}
+	if se.Status().Reason != metav1.StatusReasonNotFound {
 		return err
 	}
 	return nil
@@ -458,6 +656,34 @@ func initPersistentVolume(clientset *kubernetes.Clientset, name string) error {
 	return nil
 }
 
+func deletePersistentVolume(clientset *kubernetes.Clientset, name string) error {
+	err := clientset.CoreV1().PersistentVolumes().Delete(name, &metav1.DeleteOptions{})
+	if err != nil {
+		se, ok := err.(*apierrors.StatusError)
+		if !ok {
+			return err
+		}
+		if se.Status().Reason != metav1.StatusReasonNotFound {
+			return err
+		}
+		// Apparently the PersistentVolume was already deleted, ignoring.
+		return nil
+	}
+
+	pv, err := clientset.CoreV1().PersistentVolumes().Get(name, metav1.GetOptions{})
+	if err == nil {
+		errors.New(fmt.Sprintf("failed to delete pv %s, pv has status %v", name, pv.Status))
+	}
+	se, ok := err.(*apierrors.StatusError)
+	if !ok {
+		return err
+	}
+	if se.Status().Reason != metav1.StatusReasonNotFound {
+		return err
+	}
+	return nil
+}
+
 func initPersistentVolumeClaim(clientset *kubernetes.Clientset, namespace string, name string) error {
 	_, err := clientset.CoreV1().PersistentVolumeClaims(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
@@ -501,6 +727,34 @@ func initPersistentVolumeClaim(clientset *kubernetes.Clientset, namespace string
 
 	_, err = clientset.CoreV1().PersistentVolumeClaims(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func deletePersistentVolumeClaim(clientset *kubernetes.Clientset, namespace string, name string) error {
+	err := clientset.CoreV1().PersistentVolumeClaims(namespace).Delete(name, &metav1.DeleteOptions{})
+	if err != nil {
+		se, ok := err.(*apierrors.StatusError)
+		if !ok {
+			return err
+		}
+		if se.Status().Reason != metav1.StatusReasonNotFound {
+			return err
+		}
+		// Apparently the PersistentVolumeClaim was already deleted, ignoring.
+		return nil
+	}
+
+	pvc, err := clientset.CoreV1().PersistentVolumeClaims(namespace).Get(name, metav1.GetOptions{})
+	if err == nil {
+		errors.New(fmt.Sprintf("failed to delete pvc %s, pvc has status %v", name, pvc.Status))
+	}
+	se, ok := err.(*apierrors.StatusError)
+	if !ok {
+		return err
+	}
+	if se.Status().Reason != metav1.StatusReasonNotFound {
 		return err
 	}
 	return nil
@@ -671,6 +925,34 @@ func initDeployment(clientset *kubernetes.Clientset, namespace string, name stri
 	return nil
 }
 
+func deleteDeployment(clientset *kubernetes.Clientset, namespace string, name string, site string, image string, secret string) error {
+	err := clientset.AppsV1().Deployments(namespace).Delete(name, &metav1.DeleteOptions{})
+	if err != nil {
+		se, ok := err.(*apierrors.StatusError)
+		if !ok {
+			return err
+		}
+		if se.Status().Reason != metav1.StatusReasonNotFound {
+			return err
+		}
+		// Apparently the Deployment was already deleted, ignoring.
+		return nil
+	}
+
+	d, err := clientset.AppsV1().Deployments(namespace).Get(name, metav1.GetOptions{})
+	if err == nil {
+		errors.New(fmt.Sprintf("failed to delete deployment %s, deployment has status %v", name, d.Status))
+	}
+	se, ok := err.(*apierrors.StatusError)
+	if !ok {
+		return err
+	}
+	if se.Status().Reason != metav1.StatusReasonNotFound {
+		return err
+	}
+	return nil
+}
+
 func initService(clientset *kubernetes.Clientset, namespace string, name string, site string) error {
 	_, err := clientset.CoreV1().Services(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
@@ -701,7 +983,7 @@ func initService(clientset *kubernetes.Clientset, namespace string, name string,
 				"site": site,
 			},
 			SessionAffinity: corev1.ServiceAffinityNone,
-			Type:            corev1.ServiceTypeClusterIP,
+			Type:            corev1.ServiceTypeNodePort,
 		},
 	})
 	if err != nil {
@@ -710,6 +992,34 @@ func initService(clientset *kubernetes.Clientset, namespace string, name string,
 
 	_, err = clientset.CoreV1().Services(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteService(clientset *kubernetes.Clientset, namespace string, name string, site string) error {
+	err := clientset.CoreV1().Services(namespace).Delete(name, &metav1.DeleteOptions{})
+	if err != nil {
+		se, ok := err.(*apierrors.StatusError)
+		if !ok {
+			return err
+		}
+		if se.Status().Reason != metav1.StatusReasonNotFound {
+			return err
+		}
+		// Apparently the Service was already deleted, ignoring.
+		return nil
+	}
+
+	s, err := clientset.CoreV1().Services(namespace).Get(name, metav1.GetOptions{})
+	if err == nil {
+		errors.New(fmt.Sprintf("failed to delete service %s, service has status %v", name, s.Status))
+	}
+	se, ok := err.(*apierrors.StatusError)
+	if !ok {
+		return err
+	}
+	if se.Status().Reason != metav1.StatusReasonNotFound {
 		return err
 	}
 	return nil
@@ -734,30 +1044,9 @@ func initIngress(clientset *kubernetes.Clientset, namespace string, name string,
 			Name: name,
 		},
 		Spec: extv1beta1.IngressSpec{
-			Rules: []extv1beta1.IngressRule{
-				{
-					Host: "localhost",
-					IngressRuleValue: extv1beta1.IngressRuleValue{
-						HTTP: &extv1beta1.HTTPIngressRuleValue {
-							Paths: []extv1beta1.HTTPIngressPath {
-								{
-									Backend: extv1beta1.IngressBackend {
-										ServiceName: "tomcat",
-										ServicePort: intstr.FromInt(80),
-									},
-									Path: "/",
-								},
-							},
-						},
-					},
-				},
-			},
-			TLS: []extv1beta1.IngressTLS {
-				{
-					Hosts: []string {
-						"localhost",
-					},
-				},
+			Backend: &extv1beta1.IngressBackend{
+				ServiceName: "tomcat",
+				ServicePort: intstr.FromInt(80),
 			},
 		},
 	})
@@ -767,6 +1056,34 @@ func initIngress(clientset *kubernetes.Clientset, namespace string, name string,
 
 	_, err = clientset.ExtensionsV1beta1().Ingresses(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteIngress(clientset *kubernetes.Clientset, namespace string, name string, site string) error {
+	err := clientset.ExtensionsV1beta1().Ingresses(namespace).Delete(name, &metav1.DeleteOptions{})
+	if err != nil {
+		se, ok := err.(*apierrors.StatusError)
+		if !ok {
+			return err
+		}
+		if se.Status().Reason != metav1.StatusReasonNotFound {
+			return err
+		}
+		// Apparently the Ingress was already deleted, ignoring.
+		return nil
+	}
+
+	i, err := clientset.ExtensionsV1beta1().Ingresses(namespace).Get(name, metav1.GetOptions{})
+	if err == nil {
+		errors.New(fmt.Sprintf("failed to delete ingress %s, ingress has status %v", name, i.Status))
+	}
+	se, ok := err.(*apierrors.StatusError)
+	if !ok {
+		return err
+	}
+	if se.Status().Reason != metav1.StatusReasonNotFound {
 		return err
 	}
 	return nil

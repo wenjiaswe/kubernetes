@@ -52,7 +52,10 @@ generate_images: build/version.txt tmp/sample.war
 	docker build -q -t ${REGISTRY}/${PROJECT}/tomcat-${ARCH}:${VERSION} -f artifacts/images/tomcat-${ARCH}-dockerfile . > /dev/null
 	docker images -q ${REGISTRY}/${PROJECT}/tomcat-${ARCH}:${VERSION} >> build/${REGISTRY}_${PROJECT}_tomcat-${ARCH}_${VERSION}-container
 
+publish_images: generate_images
+    gcloud docker -- push ${REGISTRY}/${PROJECT}/tomcat-${ARCH}:${VERSION}
+
 clean:
 	rm -rf bin build
 
-.PHONY: setup build_test list_test generate_images list_setup clean
+.PHONY: setup build_test list_test generate_images publish_images list_setup clean
