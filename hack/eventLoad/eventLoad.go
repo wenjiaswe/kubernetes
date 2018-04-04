@@ -61,6 +61,7 @@ type eventLoadOpts struct {
 	startInterval int64
 	kubeConfig string
 	image string
+	tidy bool
 }
 
 type resultMessage struct {
@@ -71,8 +72,8 @@ type resultMessage struct {
 type command string
 
 const (
-	Test command = "Test"
-	TearDown command = "TearDown"
+	Test     command = "Test"
+	Shutdown command = "Shutdown"
 )
 
 type site struct {
@@ -98,6 +99,7 @@ func main() {
 	flags.Int64Var(&opts.startInterval, "startInterval", 30, "seconds between starting customer sites")
 	flags.StringVar(&opts.kubeConfig, "kubeconfig", "", "absolute path to the kubeconfig file")
 	flags.StringVar(&opts.image, "image", "gcr.io/wfender-test/tomcat-amd64:1522278020", "primary docker image")
+	flags.BoolVar(&opts.tidy, "tidy", true, "should we clean up all the sites")
 	eventLoadCmd.Execute()
 }
 
@@ -124,12 +126,12 @@ func runEventLoad() {
 	for id := 0; id < opts.numSites; id++ {
 		index := id % opts.concurrentSites
 		if testSites[index].running {
-			fmt.Printf("Shutting down test site %d\r\n ", testSites[index].id)
-			testSites[index].commandChannel <- TearDown
-			fmt.Printf("Getting results for test site %d\r\n ", testSites[index].id)
+			fmt.Printf("Shutting down test site %d\r\n", testSites[index].id)
+			testSites[index].commandChannel <- Shutdown
+			fmt.Printf("Getting results for test site %d\r\n", testSites[index].id)
 			result := <- testSites[index].resultChannel
 			if result.success {
-				fmt.Printf("Test site %d succeeded!\r\n ", testSites[index].id)
+				fmt.Printf("Test site %d succeeded!\r\n", testSites[index].id)
 			} else {
 				fmt.Printf("Test site %d failed with error %v!\r\n", testSites[index].id, result.err)
 			}
@@ -140,14 +142,14 @@ func runEventLoad() {
 		testSites[index].commandChannel = make(chan command, 1)
 		testSites[index].id = id
 		testSites[index].running = true
-		fmt.Printf("Starting test site %d\r\n ", testSites[index].id)
-		go runTestSite(testSites[index].commandChannel, testSites[index].resultChannel, clientset, testSites[index].id)
+		fmt.Printf("Starting test site %d\r\n", testSites[index].id)
+		go runTestSite(testSites[index].commandChannel, testSites[index].resultChannel, clientset, testSites[index].id, opts.tidy)
 		time.Sleep(time.Duration(opts.startInterval) * time.Second)
 	}
 
 	for index := 0; index < opts.concurrentSites; index++ {
-		testSites[index].commandChannel <- TearDown
-		result := <- testSites[index].resultChannel
+		testSites[index].commandChannel <- Shutdown
+		result := <-testSites[index].resultChannel
 		if result.success {
 			fmt.Printf("Test site %d succeeded!\r\n ", testSites[index].id)
 		} else {
@@ -159,7 +161,7 @@ func runEventLoad() {
 	fmt.Println("Test finished")
 }
 
-func runTestSite(requestChannel chan command, resultChannel chan resultMessage, clientset *kubernetes.Clientset, index int) {
+func runTestSite(requestChannel chan command, resultChannel chan resultMessage, clientset *kubernetes.Clientset, index int, tidy bool) {
 	namespace := fmt.Sprintf("site-ns-%d", index)
 	siteName := fmt.Sprintf("site-%d", index)
 	secret := fmt.Sprintf("%s-secret", siteName)
@@ -176,14 +178,17 @@ func runTestSite(requestChannel chan command, resultChannel chan resultMessage, 
 		service: service,
 		volume: volume,
 	}
-	defer func(result resultMessage, resultChannel chan resultMessage) {
-		err := tearDownSite(clientset, siteInfo)
-		if err != nil && result.success {
-			result.success = false
-			result.err = err
+	defer func() {
+		if tidy {
+			fmt.Printf("Tearing down site %s!\r\n", siteInfo.namespace)
+			err := tearDownSite(clientset, siteInfo)
+			if err != nil && result.success {
+				result.success = false
+				result.err = err
+			}
 		}
 		resultChannel <- result
-	}(result, resultChannel)
+	}()
 
 	err := createTestSite(clientset, siteInfo)
 	if err != nil {
@@ -192,7 +197,7 @@ func runTestSite(requestChannel chan command, resultChannel chan resultMessage, 
 	}
 
 	cmd := Test
-	for cmd != TearDown {
+	for cmd != Shutdown {
 		ip, err := getExternalIP(clientset, siteInfo.namespace, siteInfo.deployment, siteInfo.service)
 		if err != nil {
 			result.err = err
@@ -257,21 +262,21 @@ func createTestSite(clientset *kubernetes.Clientset, siteInfo site) error {
 		return err
 	}
 	if !ok {
-		return errors.New("Unable to find pods for your site!")
+		return errors.New("unable to find pods for your site!")
 	}
 	ok, err = verifyEndpoints(clientset, siteInfo.namespace, siteInfo.service, 2)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return errors.New("Unable to find endpoints for your site!")
+		return errors.New("unable to find endpoints for your site!")
 	}
 	ok, err = verifyIngress(clientset, siteInfo.namespace, siteInfo.deployment, 1)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return errors.New("Unable to find ingress for your site!")
+		return errors.New("unable to find ingress for your site!")
 	}
 	return nil
 }
@@ -390,34 +395,38 @@ func verifyNamespaces(clientset *kubernetes.Clientset) error {
 
 // verifyHttpEndpoint hits the relevant url and ensures it is working.
 func verifyHttpEndpoint(endpoint string) error {
-	var resp *http.Response
-	var err error
+	var body []byte
+	var termErr error
 	wait.Poll(5*time.Second, 180*time.Second, func() (bool, error) {
-		resp, err = http.Get(endpoint)
+		termErr = nil
+		resp, err := http.Get(endpoint)
 		if err != nil {
+			termErr = err
+			return false, nil
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			errMsg := fmt.Sprintf("received response %d calling GET on %s.", resp.StatusCode, endpoint)
+			termErr = errors.New(errMsg)
+			return false, nil
+		}
+		body, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Printf("error on ReadAll %T: %v.\r\n", err, err)
+			termErr = err
 			return false, nil
 		}
 		return true, nil
 	})
-	if err != nil {
-		fmt.Printf("Error on wait.Poll(Get) %T: %v.\r\n", err, err)
-		return err
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("Error on ReadAll %T: %v.\r\n", err, err)
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		errMsg := fmt.Sprintf("Received response %d calling GET on %s.", resp.StatusCode, endpoint)
-		return errors.New(errMsg)
+	if termErr != nil {
+		fmt.Printf("error on wait.Poll(Get) %T: %v.\r\n", termErr, termErr)
+		return termErr
 	}
 	r := strings.NewReplacer("\r", "", "\n", "")
 	html := r.Replace(fmt.Sprintf("%s", body))
 	re := regexp.MustCompile("^<html>.*</html>$")
 	if ! re.MatchString(html) {
-		errMsg := fmt.Sprintf("Received response %s for %s was bad.", html, endpoint)
+		errMsg := fmt.Sprintf("received response %s for %s was bad.", html, endpoint)
 		return errors.New(errMsg)
 	}
 	return nil
@@ -1133,7 +1142,7 @@ func verifyEndpoints(clientset *kubernetes.Clientset, namespace string, name str
 func verifyIngress(clientset *kubernetes.Clientset, namespace string, name string, expected int) (bool, error) {
 	result := false
 	var reqErr error
-	wait.Poll(250*time.Millisecond, 30*time.Second, func() (bool, error) {
+	wait.Poll(250*time.Millisecond, 180*time.Second, func() (bool, error) {
 		ingress, err := clientset.ExtensionsV1beta1().Ingresses(namespace).Get(name, metav1.GetOptions{})
 		if err != nil {
 			reqErr = err
