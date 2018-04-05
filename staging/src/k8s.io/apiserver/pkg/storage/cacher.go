@@ -937,9 +937,17 @@ func (c *cacheWatcher) process(initEvents []*watchCacheEvent, resourceVersion ui
 	// We should understand what is blocking us in those cases (e.g.
 	// is it lack of CPU, network, or sth else) and potentially
 	// consider increase size of result buffer in those cases.
-	const initProcessThreshold = 500 * time.Millisecond
+	const initProcessThreshold= 500 * time.Millisecond
 	startTime := time.Now()
 	for _, event := range initEvents {
+		// eventTracker Event lost: print out resourceVersion, EventType and event object name
+		meta, err := meta.Accessor(event.Object)
+		if err != nil {
+			glog.Errorf("unexpected eventTracker error: %v", err)
+		} else {
+			fmt.Printf("eventTracker,cacher/process(initEvents),%s,%s,%s,%s,%s,%s\n",
+				time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion())
+		}
 		c.sendWatchCacheEvent(event)
 	}
 	processingTime := time.Since(startTime)
@@ -960,10 +968,19 @@ func (c *cacheWatcher) process(initEvents []*watchCacheEvent, resourceVersion ui
 		}
 		// only send events newer than resourceVersion
 		if event.ResourceVersion > resourceVersion {
+			// eventTracker Event lost: print out resourceVersion, EventType and event object name
+			meta, err := meta.Accessor(event.Object)
+			if err != nil {
+				glog.Errorf("unexpected eventTracker error: %v", err)
+			} else {
+				fmt.Printf("eventTracker,cacher/process(),%s,%s,%s,%s,%s,%s\n",
+					time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion())
+			}
 			c.sendWatchCacheEvent(event)
 		}
 	}
 }
+
 
 type ready struct {
 	ok bool
