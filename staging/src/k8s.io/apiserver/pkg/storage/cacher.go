@@ -944,7 +944,7 @@ func (c *cacheWatcher) process(initEvents []*watchCacheEvent, resourceVersion ui
 		meta, err := meta.Accessor(event.Object)
 		if err != nil {
 			glog.Errorf("unexpected eventTracker error: %v", err)
-		} else {
+		}else{
 			fmt.Printf("eventTracker,cacher/process(initEvents),%s,%s,%s,%s,%s,%s\n",
 				time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion())
 		}
@@ -972,7 +972,7 @@ func (c *cacheWatcher) process(initEvents []*watchCacheEvent, resourceVersion ui
 			meta, err := meta.Accessor(event.Object)
 			if err != nil {
 				glog.Errorf("unexpected eventTracker error: %v", err)
-			} else {
+			}else{
 				fmt.Printf("eventTracker,cacher/process(),%s,%s,%s,%s,%s,%s\n",
 					time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion())
 			}

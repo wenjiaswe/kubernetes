@@ -14,7 +14,7 @@
 
 ARCH ?= amd64
 REGISTRY ?= gcr.io
-PROJECT ?= $(shell whoami)-test
+PROJECT ?= $(shell whoami)-k8s-dev
 VERSION ?= $(shell cat build/version.txt)
 IMAGE ?= $(shell docker image ls | egrep "${PROJECT}/tomcat" | sort +2 -3 | tail -1 | sed -E 's/\s+/ /g' | cut -d" " -f1,2 | sed -E 's/\s/:/')
 
