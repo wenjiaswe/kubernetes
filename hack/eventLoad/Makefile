@@ -20,6 +20,8 @@ IMAGE ?= $(shell docker image ls | egrep "${PROJECT}/tomcat" | sort +2 -3 | tail
 
 bin/eventLoad: eventLoad.go
 	go build -o bin/eventLoad eventLoad.go
+
+bin/eventCheck: eventCheck.go
 	go build -o bin/eventCheck eventCheck.go
 
 build/version.txt: setup
@@ -43,7 +45,7 @@ list_setup:
 	@echo kubectl create -f artifacts/templates/services.yaml
 	@echo kubectl create -f artifacts/templates/ingress.yaml
 
-build_test: setup bin/eventLoad
+build_test: setup bin/eventLoad bin/eventCheck
 
 list_test:
 	@echo Instructions for testing project ${PROJECT}
