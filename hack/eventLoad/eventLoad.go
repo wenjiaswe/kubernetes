@@ -27,7 +27,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -42,6 +41,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"path/filepath"
 )
 
 var (
@@ -62,6 +62,7 @@ type eventLoadOpts struct {
 	kubeConfig string
 	image string
 	tidy bool
+	inCluster bool
 }
 
 type resultMessage struct {
@@ -100,6 +101,7 @@ func main() {
 	flags.StringVar(&opts.kubeConfig, "kubeconfig", "", "absolute path to the kubeconfig file")
 	flags.StringVar(&opts.image, "image", "gcr.io/wfender-test/tomcat-amd64:1522278020", "primary docker image")
 	flags.BoolVar(&opts.tidy, "tidy", true, "should we clean up all the sites")
+	flags.BoolVar(&opts.inCluster, "inCluster", false, "should be assume the test is running in cluster")
 	eventLoadCmd.Execute()
 }
 
@@ -250,9 +252,12 @@ func createTestSite(clientset *kubernetes.Clientset, siteInfo site) error {
 	if err != nil {
 		return err
 	}
-	err = initIngress(clientset, siteInfo.namespace, siteInfo.deployment, siteInfo.service)
-	if err != nil {
-		return err
+	if ! opts.inCluster {
+		// Skip ingress if running "in cluster"
+		err = initIngress(clientset, siteInfo.namespace, siteInfo.deployment, siteInfo.service)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Cluster state has been state, verify/wait till its now in a working state.
@@ -262,31 +267,35 @@ func createTestSite(clientset *kubernetes.Clientset, siteInfo site) error {
 		return err
 	}
 	if !ok {
-		return errors.New("unable to find pods for your site!")
+		return errors.New("unable to find pods for your site")
 	}
 	ok, err = verifyEndpoints(clientset, siteInfo.namespace, siteInfo.service, 2)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return errors.New("unable to find endpoints for your site!")
+		return errors.New("unable to find endpoints for your site")
 	}
-	ok, err = verifyIngress(clientset, siteInfo.namespace, siteInfo.deployment, 1)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return errors.New("unable to find ingress for your site!")
+	if ! opts.inCluster {
+		ok, err = verifyIngress(clientset, siteInfo.namespace, siteInfo.deployment, 1)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("unable to find ingress for your site")
+		}
 	}
 	return nil
 }
 
 func tearDownSite(clientset *kubernetes.Clientset, siteInfo site) error {
-	err := deleteIngress(clientset, siteInfo.namespace, siteInfo.deployment, siteInfo.site)
-	if err != nil {
-		return err
+	if ! opts.inCluster {
+		err := deleteIngress(clientset, siteInfo.namespace, siteInfo.deployment, siteInfo.site)
+		if err != nil {
+			return err
+		}
 	}
-	err = deleteService(clientset, siteInfo.namespace, siteInfo.service, siteInfo.site)
+	err := deleteService(clientset, siteInfo.namespace, siteInfo.service, siteInfo.site)
 	if err != nil {
 		return err
 	}
@@ -320,20 +329,35 @@ func tearDownSite(clientset *kubernetes.Clientset, siteInfo site) error {
 
 // validateOptions will actually validate the inputs.
 func validateOptions() error {
-	if opts.numSites < 0 || opts.numSites > 10000 {
+	if opts.numSites < 1 || opts.numSites > 10000 {
 		errMsg := fmt.Sprintf("Number of sites should be between 0 and 10000, not %d.", opts.numSites)
 		return errors.New(errMsg)
 	}
 	if opts.kubeConfig == "" {
-		home := homeDir()
-		fmt.Printf("Got a home of %s.\r\n", home)
-		if home == "" {
-			errMsg := fmt.Sprintf("Need with kubeconfig set or a HOME env variable set")
-			return errors.New(errMsg)
+		if ! opts.inCluster {
+			home := homeDir()
+			fmt.Printf("Got a home of %s.\r\n", home)
+			if home == "" {
+				errMsg := fmt.Sprintf("Need with kubeconfig set or a HOME env variable set")
+				return errors.New(errMsg)
+			}
+			kubeconfig := filepath.Join(home, ".kube", "config")
+			fmt.Printf("Got a kubeconfig of %s.\r\n", kubeconfig)
+			opts.kubeConfig = kubeconfig
 		}
-		kubeconfig := filepath.Join(home, ".kube", "config")
-		fmt.Printf("Got a kubeconfig of %s.\r\n", kubeconfig)
-		opts.kubeConfig = kubeconfig
+	}
+
+	if opts.concurrentSites < 1 || opts.concurrentSites > opts.numSites {
+		errMsg := fmt.Sprintf("Number of concurrent sites should be between 1 and # sites, not %d.", opts.concurrentSites)
+		return errors.New(errMsg)
+	}
+	if opts.startInterval < 1 || opts.startInterval > 1800 {
+		errMsg := fmt.Sprintf("Number of concurrent sites should be between 1 and 1800, not %d.", opts.startInterval)
+		return errors.New(errMsg)
+	}
+	if opts.image == "" {
+		errMsg := fmt.Sprintf("Need an actual container image with which to run the test.")
+		return errors.New(errMsg)
 	}
 	return nil
 }
@@ -350,6 +374,7 @@ func initClientSet() (*kubernetes.Clientset, error) {
 	fmt.Printf("Building config with %s.\r\n", opts.kubeConfig)
 	config, err := clientcmd.BuildConfigFromFlags("", opts.kubeConfig)
 	if err != nil {
+		fmt.Printf("Got error calling clientcmd.BuildConfigFromFlags(\"\", \"%s\")\r\n", opts.kubeConfig)
 		return nil, err
 	}
 
@@ -994,6 +1019,12 @@ func initService(clientset *kubernetes.Clientset, namespace string, name string,
 		return nil
 	}
 
+	var serviceType corev1.ServiceType
+	if opts.inCluster {
+		serviceType = corev1.ServiceTypeNodePort
+	} else {
+		serviceType = corev1.ServiceTypeClusterIP
+	}
 	_, err = clientset.CoreV1().Services(namespace).Create(&corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -1010,7 +1041,7 @@ func initService(clientset *kubernetes.Clientset, namespace string, name string,
 				"site": site,
 			},
 			SessionAffinity: corev1.ServiceAffinityNone,
-			Type:            corev1.ServiceTypeNodePort,
+			Type:            serviceType,
 		},
 	})
 	if err != nil {
@@ -1190,15 +1221,17 @@ func verifyPods(clientset *kubernetes.Clientset, namespace string, expected int)
 }
 
 func getExternalIP(clientset *kubernetes.Clientset, namespace string, name string, service string) (string, error) {
-	ingress, err := clientset.ExtensionsV1beta1().Ingresses(namespace).Get(name, metav1.GetOptions{})
-	if err == nil {
-		status := ingress.Status
-		lb := status.LoadBalancer
-		in := lb.Ingress
-		if len(in) != 1 {
-			return "", errors.New(fmt.Sprintf("got %d addresses on ingress %s:%s", len(in), namespace, name))
+	if ! opts.inCluster {
+		ingress, err := clientset.ExtensionsV1beta1().Ingresses(namespace).Get(name, metav1.GetOptions{})
+		if err == nil {
+			status := ingress.Status
+			lb := status.LoadBalancer
+			in := lb.Ingress
+			if len(in) != 1 {
+				return "", errors.New(fmt.Sprintf("got %d addresses on ingress %s:%s", len(in), namespace, name))
+			}
+			return in[0].IP, nil
 		}
-		return in[0].IP, nil
 	}
 	srvc, err := clientset.CoreV1().Services(namespace).Get(service, metav1.GetOptions{})
 	if err != nil {

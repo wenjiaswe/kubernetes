@@ -27,12 +27,27 @@ import (
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	kubeexternalinformers "k8s.io/client-go/informers"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
+	"k8s.io/apiserver/pkg/admission"
 )
 
-func createAPIExtensionsConfig(kubeAPIServerConfig genericapiserver.Config, externalInformers kubeexternalinformers.SharedInformerFactory, commandOptions *options.ServerRunOptions) (*apiextensionsapiserver.Config, error) {
+func createAPIExtensionsConfig(
+	kubeAPIServerConfig genericapiserver.Config,
+	externalInformers kubeexternalinformers.SharedInformerFactory,
+	pluginInitializers []admission.PluginInitializer,
+	commandOptions *options.ServerRunOptions,
+) (*apiextensionsapiserver.Config, error) {
 	// make a shallow copy to let us twiddle a few things
 	// most of the config actually remains the same.  We only need to mess with a couple items related to the particulars of the apiextensions
 	genericConfig := kubeAPIServerConfig
+
+	// override genericConfig.AdmissionControl with kube-aggregator's scheme,
+	// because aggregator apiserver should use its own scheme to convert its own resources.
+	commandOptions.Admission.ApplyTo(
+		&genericConfig,
+		externalInformers,
+		genericConfig.LoopbackClientConfig,
+		apiextensionsapiserver.Scheme,
+		pluginInitializers...)
 
 	// copy the etcd options so we don't mutate originals.
 	etcdOptions := *commandOptions.Etcd
@@ -60,6 +75,8 @@ func createAPIExtensionsConfig(kubeAPIServerConfig genericapiserver.Config, exte
 	return apiextensionsConfig, nil
 }
 
-func createAPIExtensionsServer(apiextensionsConfig *apiextensionsapiserver.Config, delegateAPIServer genericapiserver.DelegationTarget) (*apiextensionsapiserver.CustomResourceDefinitions, error) {
+func createAPIExtensionsServer(
+	apiextensionsConfig *apiextensionsapiserver.Config,
+	delegateAPIServer genericapiserver.DelegationTarget) (*apiextensionsapiserver.CustomResourceDefinitions, error) {
 	return apiextensionsConfig.Complete().New(delegateAPIServer)
 }

@@ -14,8 +14,9 @@
 
 ARCH ?= amd64
 REGISTRY ?= gcr.io
-PROJECT ?= $(shell whoami)-k8s-dev
-VERSION ?= $(shell cat build/version.txt)
+ZONE ?= us-central1-b
+PROJECT ?= $(shell whoami)-test
+VERSION ?= $(shell cat build/version.txt 2> /dev/null)
 IMAGE ?= $(shell docker image ls | egrep "${PROJECT}/tomcat" | sort +2 -3 | tail -1 | sed -E 's/\s+/ /g' | cut -d" " -f1,2 | sed -E 's/\s/:/')
 
 bin/eventLoad: eventLoad.go
@@ -47,6 +48,12 @@ list_setup:
 
 build_test: setup bin/eventLoad bin/eventCheck
 
+push_test: bin/eventLoad bin/eventCheck
+	gcloud compute scp --project "${PROJECT}"  --zone "${ZONE}" ./bin/eventLoad kubernetes-master:/tmp
+	gcloud compute scp --project "${PROJECT}"  --zone "${ZONE}" ./bin/eventCheck kubernetes-master:/tmp
+	gcloud compute scp --project "${PROJECT}"  --zone "${ZONE}" ~/.kube/config kubernetes-master:/tmp/kube.config
+	@echo /tmp/eventLoad --kubeconfig /tmp/kube.config --image ${IMAGE} --concurrentSites 2 --numSites 6 --inCluster=true
+
 list_test:
 	@echo Instructions for testing project ${PROJECT}
 	@echo ./bin/eventLoad --kubeconfig /var/run/kubernetes/admin.kubeconfig --image ${IMAGE}
@@ -61,4 +68,4 @@ publish_images: generate_images
 clean:
 	rm -rf bin build
 
-.PHONY: setup build_test list_test generate_images publish_images list_setup clean
+.PHONY: setup build_test push_test list_test generate_images publish_images list_setup clean

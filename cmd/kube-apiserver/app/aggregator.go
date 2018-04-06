@@ -47,12 +47,29 @@ import (
 	"k8s.io/kube-aggregator/pkg/controllers/autoregister"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
 	"k8s.io/kubernetes/pkg/master/controller/crdregistration"
+	"k8s.io/apiserver/pkg/admission"
 )
 
-func createAggregatorConfig(kubeAPIServerConfig genericapiserver.Config, commandOptions *options.ServerRunOptions, externalInformers kubeexternalinformers.SharedInformerFactory, serviceResolver aggregatorapiserver.ServiceResolver, proxyTransport *http.Transport) (*aggregatorapiserver.Config, error) {
+func createAggregatorConfig(
+	kubeAPIServerConfig genericapiserver.Config,
+	commandOptions *options.ServerRunOptions,
+	externalInformers kubeexternalinformers.SharedInformerFactory,
+	serviceResolver aggregatorapiserver.ServiceResolver,
+	proxyTransport *http.Transport,
+	pluginInitializers []admission.PluginInitializer,
+	) (*aggregatorapiserver.Config, error) {
 	// make a shallow copy to let us twiddle a few things
 	// most of the config actually remains the same.  We only need to mess with a couple items related to the particulars of the aggregator
 	genericConfig := kubeAPIServerConfig
+
+	// override genericConfig.AdmissionControl with kube-aggregator's scheme,
+	// because aggregator apiserver should use its own scheme to convert its own resources.
+	commandOptions.Admission.ApplyTo(
+		&genericConfig,
+		externalInformers,
+		genericConfig.LoopbackClientConfig,
+		aggregatorscheme.Scheme,
+		pluginInitializers...)
 
 	// the aggregator doesn't wire these up.  It just delegates them to the kubeapiserver
 	genericConfig.EnableSwaggerUI = false
