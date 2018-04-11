@@ -238,18 +238,19 @@ func (wc *watchChan) processEvent(wg *sync.WaitGroup) {
 				glog.Warningf("Fast watcher, slow processing. Number of buffered events: %d."+
 					"Probably caused by slow dispatching events to watchers", outgoingBufSize)
 			}
+
+			// If user couldn't receive results fast enough, we also block incoming events from watcher.
+			// Because storing events in local will cause more memory usage.
+			// The worst case would be closing the fast watcher.
+			res.TrackInfo = res.TrackInfo + "watcher/processEvent;"
 			// eventTracker Event lost: print out resourceVersion, EventType and event object name
 			// if event is for a pod or a node
 			meta, err := meta.Accessor(res.Object)
 			if err != nil {
 				return
 			}
-			fmt.Printf("eventTracker,etcd3/watcher/processEvent,%s,%s,%s,%s,,%s\n",
-				time.Now().Format(time.RFC3339), res.Type, meta.GetNamespace(), meta.GetName(), meta.GetResourceVersion())
-			// If user couldn't receive results fast enough, we also block incoming events from watcher.
-			// Because storing events in local will cause more memory usage.
-			// The worst case would be closing the fast watcher.
-			res.TrackInfo = res.TrackInfo + "watcher/processEvent;"
+			fmt.Printf("eventTracker,etcd3/watcher/processEvent,%s,%s,%s,%s, ,%s,%s\n",
+				time.Now().Format(time.RFC3339), res.Type, meta.GetNamespace(), meta.GetName(), meta.GetResourceVersion(), res.TrackInfo)
 			select {
 			case wc.resultChan <- *res:
 			case <-wc.ctx.Done():
@@ -287,7 +288,7 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 	if curObj != nil {
 		metaCur, err := meta.Accessor(curObj)
 		if err == nil {
-			fmt.Printf("eventTracker,etcd3/watcher/transform/curObj,%s,,%s,%s,,%s\n",
+			fmt.Printf("eventTracker,etcd3/watcher/transform/curObj,%s, ,%s,%s, ,%s, \n",
 				time.Now().Format(time.RFC3339), metaCur.GetNamespace(), metaCur.GetName(), metaCur.GetResourceVersion())
 		}
 	}
@@ -295,7 +296,7 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 	if oldObj != nil {
 		metaOld, err := meta.Accessor(oldObj)
 		if err == nil {
-			fmt.Printf("eventTracker,etcd3/watcher/transform/oldObj,%s,,%s,%s,,%s\n",
+			fmt.Printf("eventTracker,etcd3/watcher/transform/oldObj,%s, ,%s,%s, ,%s, \n",
 				time.Now().Format(time.RFC3339), metaOld.GetNamespace(), metaOld.GetName(), metaOld.GetResourceVersion())
 		}
 	}

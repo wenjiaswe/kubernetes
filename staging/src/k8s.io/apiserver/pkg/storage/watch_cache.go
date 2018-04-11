@@ -234,8 +234,8 @@ func (w *watchCache) processEvent(event watch.Event, resourceVersion uint64, nam
 	}
 
 	// eventTracker Event lost: print out resourceVersion, EventType and event object name
-	fmt.Printf("eventTracker,watch_cache/processEvent,%s,%s,%s,%s,%s,%d\n",
-		time.Now().Format(time.RFC3339), event.Type, namespace, name, reflect.TypeOf(event.Object), resourceVersion)
+	fmt.Printf("eventTracker,watch_cache/processEvent,%s,%s,%s,%s,%s,%d,%s\n",
+		time.Now().Format(time.RFC3339), event.Type, namespace, name, reflect.TypeOf(event.Object), resourceVersion, event.TrackInfo)
 
 	watchCacheEvent := &watchCacheEvent{
 		Type:             event.Type,
