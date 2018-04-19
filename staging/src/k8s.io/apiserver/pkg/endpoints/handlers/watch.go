@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -229,10 +230,10 @@ func (s *WatchServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			// outEvent.Object is raw
 			meta, err := meta.Accessor(obj)
 			if err != nil {
-				glog.Errorf("unexpected eventTracker error: %v", err)
+				glog.Warningf("unexpected eventTracker error: %v, watch/232, %s", err, reflect.TypeOf(obj))
 			} else {
-				fmt.Printf("eventTracker,watch/ServeHTTP,%s,%s,%s,%s,%s,%s,%s\n",
-					time.Now().Format(time.RFC3339), outEvent.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(outEvent.Object), meta.GetResourceVersion(), outEvent.TrackInfo)
+				glog.Warningf("eventTracker,watch/ServeHTTP,%s,%s,%s,%s,%s,%s,%s\n",
+					outEvent.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(outEvent.Object), meta.GetResourceVersion(), outEvent.TrackInfo, meta.GetUID())
 			}
 
 			if err := e.Encode(outEvent); err != nil {

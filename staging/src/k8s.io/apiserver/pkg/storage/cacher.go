@@ -40,6 +40,8 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utiltrace "k8s.io/apiserver/pkg/util/trace"
 	"k8s.io/client-go/tools/cache"
+	"os"
+	"strconv"
 )
 
 // CacherConfig contains the configuration for a given Cache.
@@ -616,10 +618,10 @@ func (c *Cacher) dispatchEvent(event *watchCacheEvent) {
 	// eventTracker Event lost: print out resourceVersion, EventType and event object name
 	meta, err := meta.Accessor(event.Object)
 	if err != nil {
-		glog.Errorf("unexpected eventTracker error: %v", err)
+		glog.Warningf("unexpected eventTracker error: %v, cacher/619, %s", err, reflect.TypeOf(event.Object))
 	} else {
-		fmt.Printf("eventTracker,cacher/dispatchEvent,%s,%s,%s,%s,%s,%s,%s\n",
-			time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+		glog.Warningf("eventTracker,cacher/dispatchEvent,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
 	}
 	// Iterate over "allWatchers" no matter what the trigger function is.
 	for _, watcher := range c.watchers.allWatchers {
@@ -833,16 +835,16 @@ func (c *cacheWatcher) add(event *watchCacheEvent, budget *timeBudget) {
 	// eventTracker Event lost: print out resourceVersion, EventType and event object name
 	meta, err := meta.Accessor(event.Object)
 	if err != nil {
-		glog.Errorf("unexpected eventTracker error: %v", err)
+		glog.Warningf("unexpected eventTracker error: %v, cacher/836, %s", err, reflect.TypeOf(event.Object))
 	}else{
-		fmt.Printf("eventTracker,cacher/add0,%s,%s,%s,%s,%s,%s,%s\n",
-			time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+		glog.Warningf("eventTracker,cacher/add0,%s,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
 	}
 	// Try to send the event immediately, without blocking.
 	select {
 	case c.input <- event:
-		fmt.Printf("eventTracker,cacher/add1,%s,%s,%s,%s,%s,%s,%s\n",
-			time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+		glog.Warningf("eventTracker,cacher/add1,%s,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
 		return
 	default:
 	}
@@ -864,8 +866,8 @@ func (c *cacheWatcher) add(event *watchCacheEvent, budget *timeBudget) {
 	select {
 	case c.input <- event:
 		// eventTracker Event lost: print out resourceVersion, EventType and event object name
-		fmt.Printf("eventTracker,cacher/add2,%s,%s,%s,%s,%s,%s,%s,%s\n",
-				time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+		glog.Warningf("eventTracker,cacher/add2,%s,%s,%s,%s,%s,%s,%s,%s\n",
+				event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
 		stopped := t.Stop()
 		if !stopped {
 			// Consume triggered (but not yet received) timer event
@@ -877,8 +879,8 @@ func (c *cacheWatcher) add(event *watchCacheEvent, budget *timeBudget) {
 		// Since we don't want to block on it infinitely,
 		// we simply terminate it.
 		// eventTracker Event lost: print out resourceVersion, EventType and event object name
-		fmt.Printf("eventTracker,cacher/add3,%s,%s,%s,%s,%s,%s,%s,%s\n",
-				time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+		glog.Warningf("eventTracker,cacher/add3,%s,%s,%s,%s,%s,%s,%s,%s\n",
+				event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
 
 		c.forget(false)
 		c.stop()
@@ -893,10 +895,10 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 	// eventTracker Event lost: print out resourceVersion, EventType and event object name
 	meta, err := meta.Accessor(event.Object)
 	if err != nil {
-		glog.Errorf("unexpected eventTracker error: %v", err)
+		glog.Warningf("unexpected eventTracker error: %v, cacher/896, %s", err, reflect.TypeOf(event.Object))
 	}else{
-		fmt.Printf("eventTracker,cacher/send0,%s,%s,%s,%s,%s,%s,%s\n",
-			time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+		glog.Warningf("eventTracker,cacher/send0,%s,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
 	}
 
 	curObjPasses := event.Type != watch.Deleted && c.filter(event.Key, event.ObjLabels, event.ObjFields, event.ObjUninitialized)
@@ -909,8 +911,8 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 		return
 	}
 
-	fmt.Printf("eventTracker,cacher/send1,%s,%s,%s,%s,%s,%s,%s\n",
-			time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+	glog.Warningf("eventTracker,cacher/send1,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo,meta.GetUID())
 
 	var watchEvent watch.Event
 	switch {
@@ -927,8 +929,8 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 		watchEvent = watch.Event{Type: watch.Deleted, Object: oldObj}
 	}
 
-	fmt.Printf("eventTracker,cacher/send2,%s,%s,%s,%s,%s,%s,%s\n",
-		time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+	glog.Warningf("eventTracker,cacher/send2,%s,%s,%s,%s,%s,%s,%s\n",
+		event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo,meta.GetUID())
 
 	// We need to ensure that if we put event X to the c.result, all
 	// previous events were already put into it before, no matter whether
@@ -949,7 +951,7 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 	}
 
 	// Append event code path into event track info
-	watchEvent.TrackInfo = event.TrackInfo + "cacher/sendWatchCacheEvent;"
+	watchEvent.TrackInfo = event.TrackInfo + "cacher/sendWatchCacheEvent" + time.Now().Format(time.RFC3339Nano) + "p" + strconv.Itoa(os.Getpid())
 	select {
 	case c.result <- watchEvent:
 	case <-c.done:
@@ -978,10 +980,10 @@ func (c *cacheWatcher) process(initEvents []*watchCacheEvent, resourceVersion ui
 		// eventTracker Event lost: print out resourceVersion, EventType and event object name
 		meta, err := meta.Accessor(event.Object)
 		if err != nil {
-			glog.Errorf("unexpected eventTracker error: %v", err)
+			glog.Warningf("unexpected eventTracker error: %v, cacher/981, %s", err, reflect.TypeOf(event.Object))
 		}else{
-			fmt.Printf("eventTracker,cacher/process(initEvents),%s,%s,%s,%s,%s,%s,%s\n",
-				time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+			glog.Warningf("eventTracker,cacher/process(initEvents),%s,%s,%s,%s,%s,%s,%s,%s\n",
+				event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo,meta.GetUID())
 		}
 		c.sendWatchCacheEvent(event)
 	}
@@ -1006,10 +1008,10 @@ func (c *cacheWatcher) process(initEvents []*watchCacheEvent, resourceVersion ui
 			// eventTracker Event lost: print out resourceVersion, EventType and event object name
 			meta, err := meta.Accessor(event.Object)
 			if err != nil {
-				glog.Errorf("unexpected eventTracker error: %v", err)
+				glog.Warningf("unexpected eventTracker error: %v, cacher/1009, %s", err, reflect.TypeOf(event.Object))
 			}else{
-				fmt.Printf("eventTracker,cacher/process(),%s,%s,%s,%s,%s,%s,%s\n",
-					time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo)
+				glog.Warningf("eventTracker,cacher/process(),%s,%s,%s,%s,%s,%s,%s\n",
+					event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo,meta.GetUID())
 			}
 			c.sendWatchCacheEvent(event)
 		}

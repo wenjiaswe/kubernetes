@@ -388,13 +388,14 @@ loop:
 			}
 			meta, err := meta.Accessor(event.Object)
 			if err != nil {
+				glog.Errorf("unexpected eventTracker error: %v, reflector/391, %s", err, reflect.TypeOf(event.Object))
 				utilruntime.HandleError(fmt.Errorf("%s: unable to understand watch event %#v", r.name, event))
 				continue
 			}
 			newResourceVersion := meta.GetResourceVersion()
 			// eventTracker Event lost: print out resourceVersion, EventType and event object name
-			fmt.Printf("eventTracker,reflector/watchHandler/(caller:%s),%s,%s,%s,%s,%s,%s,%s\n",
-				r.name, time.Now().Format(time.RFC3339), event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), newResourceVersion, event.TrackInfo)
+			glog.Warningf("eventTracker,reflector/watchHandler/(caller:%s),%s,%s,%s,%s,%s,%s,%s\n",
+				r.name, event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), newResourceVersion, event.TrackInfo, meta.GetUID())
 			switch event.Type {
 			case watch.Added:
 				err := r.store.Add(event.Object)

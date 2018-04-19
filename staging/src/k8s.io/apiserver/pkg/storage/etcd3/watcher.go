@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"reflect"
 
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -30,8 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/value"
-
-	"time"
 
 	"github.com/coreos/etcd/clientv3"
 	"github.com/golang/glog"
@@ -247,10 +246,11 @@ func (wc *watchChan) processEvent(wg *sync.WaitGroup) {
 			// if event is for a pod or a node
 			meta, err := meta.Accessor(res.Object)
 			if err != nil {
+				glog.Warningf("unexpected eventTracker error: %v, etcd3/watcher/251, %s", err, reflect.TypeOf(res.Object))
 				return
 			}
-			fmt.Printf("eventTracker,etcd3/watcher/processEvent,%s,%s,%s,%s, ,%s,%s\n",
-				time.Now().Format(time.RFC3339), res.Type, meta.GetNamespace(), meta.GetName(), meta.GetResourceVersion(), res.TrackInfo)
+			glog.Warningf("eventTracker,etcd3/watcher/processEvent,%s,%s,%s,%s,%s,%s,%s\n",
+				res.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(res.Object),meta.GetResourceVersion(), res.TrackInfo,meta.GetUID())
 			select {
 			case wc.resultChan <- *res:
 			case <-wc.ctx.Done():
@@ -286,18 +286,22 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 	// eventTracker Event lost: print out resourceVersion, EventType and event object name
 	// if event is for a pod or a node
 	if curObj != nil {
-		metaCur, err := meta.Accessor(curObj)
-		if err == nil {
-			fmt.Printf("eventTracker,etcd3/watcher/transform/curObj,%s, ,%s,%s, ,%s, \n",
-				time.Now().Format(time.RFC3339), metaCur.GetNamespace(), metaCur.GetName(), metaCur.GetResourceVersion())
+		metaCur, currerr := meta.Accessor(curObj)
+		if currerr != nil {
+			glog.Warningf("unexpected eventTracker error: %v, etcd3/watcher/292, %s", currerr, reflect.TypeOf(curObj))
+		}else{
+			glog.Warningf("eventTracker,etcd3/watcher/transform/curObj, ,%s,%s, ,%s, ,%s\n",
+				metaCur.GetNamespace(), metaCur.GetName(), metaCur.GetResourceVersion(),metaCur.GetUID())
 		}
 	}
 
 	if oldObj != nil {
-		metaOld, err := meta.Accessor(oldObj)
-		if err == nil {
-			fmt.Printf("eventTracker,etcd3/watcher/transform/oldObj,%s, ,%s,%s, ,%s, \n",
-				time.Now().Format(time.RFC3339), metaOld.GetNamespace(), metaOld.GetName(), metaOld.GetResourceVersion())
+		metaOld, olderr := meta.Accessor(oldObj)
+		if olderr != nil {
+			glog.Warningf("unexpected eventTracker error: %v, etcd3/watcher/302, %s", oldObj, reflect.TypeOf(oldObj))
+		}else{
+			glog.Warningf("eventTracker,etcd3/watcher/transform/oldObj, ,%s,%s, ,%s, ,%s\n",
+				metaOld.GetNamespace(), metaOld.GetName(), metaOld.GetResourceVersion(),metaOld.GetUID())
 		}
 	}
 

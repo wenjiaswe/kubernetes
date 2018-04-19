@@ -397,7 +397,7 @@ func verifyNamespaces(clientset *kubernetes.Clientset) error {
 func verifyHttpEndpoint(endpoint string) error {
 	var body []byte
 	var termErr error
-	wait.Poll(5*time.Second, 180*time.Second, func() (bool, error) {
+	wait.Poll(5*time.Second, 300*time.Second, func() (bool, error) {
 		termErr = nil
 		resp, err := http.Get(endpoint)
 		if err != nil {

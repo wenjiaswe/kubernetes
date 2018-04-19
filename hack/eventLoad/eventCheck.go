@@ -26,6 +26,7 @@ List 7: "cacher/send1"
 List 8: "cacher/send2"
 List 9: scheduler reflecter
 List 10: kcm reflecter
+List 11: "watch/ServeHTTP""
 Please find details here: https://github.com/kubernetes/kubernetes/pull/61067
 `
 )
@@ -58,18 +59,19 @@ type eventCheckOpts struct {
 }
 
 func (e eventTrackerEntry) Print(){
-	fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n", e.dataPoint, e.timestamp, e.eventType, e.namespace, e.objName, e.reflectType, e.resourceVersion)
+	fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n", e.dataPoint, e.eventType, e.namespace, e.objName, e.reflectType, e.resourceVersion)
 	return
 }
 
 type eventTrackerEntry struct {
 	dataPoint       string
-	timestamp       string
 	eventType       string
 	namespace       string
 	objName         string
 	reflectType     string
 	resourceVersion string
+	trackinfo       string
+	uid             string
 }
 
 func main() {
@@ -89,75 +91,23 @@ func main() {
 func runEventCheck(){
 	fmt.Println("here")
 	baseNum := 0
-	//var baseNum int
-	//switch strings.ToUpper(ecOpts.baseList){
-	//case "ETCD":
-	//	baseNum = 0
-	//case "OUTETCD":
-	//	baseNum = 1
-	//case "INAPISERVER":
-	//	baseNum = 2
-	//case "OUTAPISERVER":
-	//	baseNum = 3
-	////case "CACHERADD":
-	////	baseNum = 4
-	//case "SCHEDULER":
-	//	baseNum = 4
-	//case "CONTROLLERMANAGER":
-	//	baseNum = 5
-	//default:
-	//	baseNum = 0
-	//}
 
+	fmt.Println("Checking logs...")
+	err := FilterDirs("kube-apiserver.log", ecOpts.logDir)
 
-	//for {
-	//	time.Sleep(time.Duration(3) * time.Second)
-		fmt.Println("Checking logs...")
-		err := FilterDirs("kube-apiserver.log", ecOpts.logDir)
+	if err != nil {
+		log.Fatal("Error reading apiserver log from logDir!")
+	}
 
-		//fmt.Println(kaslogs)
-		if err != nil {
-			log.Fatal("Error reading apiserver log from logDir!")
-		}
-		//for _, kaslog := range kaslogs {
-		//	currEventList, currLogEntries, err := readLogs(kaslog)
-		//	if err != nil {
-		//		fmt.Println(err)
-		//		os.Exit(1)
-		//	}
-		//	apiEventList = append(apiEventList, currEventList...)
-		//	apiLogEntries = append(apiLogEntries, currLogEntries...)
-		//}
+	err = FilterDirs("kube-scheduler.log", ecOpts.logDir)
+	if err != nil {
+		log.Fatal("Error reading scheduler log from logDir!")
+	}
 
-		err = FilterDirs("kube-scheduler.log", ecOpts.logDir)
-		if err != nil {
-			log.Fatal("Error reading scheduler log from logDir!")
-		}
-		//for _, slog := range slogs {
-		//	currEventList, _, err := readLogs(slog)
-		//	if err != nil {
-		//		fmt.Println(err)
-		//		os.Exit(1)
-		//	}
-		//	schedulerEventList = append(schedulerEventList, currEventList...)
-		//}
-
-		err = FilterDirs("kube-controller-manager.log", ecOpts.logDir)
-		if err != nil {
-			log.Fatal("Error reading scheduler log from logDir!")
-		}
-		//for _, kcmlog := range kcmlogs {
-		//	currEventList, _, err := readLogs(kcmlog)
-		//	if err != nil {
-		//		fmt.Println(err)
-		//		os.Exit(1)
-		//	}
-		//	kcmEventList = append(kcmEventList, currEventList...)
-		//}
-	//}
-
-	fmt.Printf("schedulerlist: %d, kcmlist: %d\n", len(schedulerEventList), len(kcmEventList))
-
+	err = FilterDirs("kube-controller-manager.log", ecOpts.logDir)
+	if err != nil {
+		log.Fatal("Error reading scheduler log from logDir!")
+	}
 
 	podsList := getPodsList(apiLogEntries)
 	podCnt := len(podsList)
@@ -168,9 +118,9 @@ func runEventCheck(){
 	var falsePodList []string
 
 	for _, podName := range podsList {
-		rvLists = make([][]int, 11)
-		eventLists = make([][]eventTrackerEntry, 11)
-		fillList4APIServer(apiEventList,  podName)
+		rvLists = make([][]int, 12)
+		eventLists = make([][]eventTrackerEntry, 12)
+		fillList4APIServer(apiEventList, podName)
 		fillList4Client(schedulerEventList, 9, podName)
 		fillList4Client(kcmEventList, 10, podName)
 		for _, rvlist := range rvLists {
@@ -198,10 +148,12 @@ func runEventCheck(){
 func FilterDirs(prefix string, dir string) error {
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
+		fmt.Println(err)
 		return err
 	}
 	for _, f := range files {
 		currdir := filepath.Join(dir, f.Name())
+		//fmt.Println(currdir)
 		currfiles, currerr := ioutil.ReadDir(currdir)
 		if currerr != nil {
 			return currerr
@@ -251,36 +203,40 @@ func readLines(path string) ( []eventTrackerEntry, []string, error) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		currLine := scanner.Text()
-		result := strings.Split(currLine, ",")
-		if result[0] == "eventTracker"{
-			lines = append(lines, currLine)
-			var currEntry eventTrackerEntry
-			currEntry.dataPoint = result[1]
-			currEntry.timestamp = result[2]
-			currEntry.eventType = result[3]
-			currEntry.namespace = result[4]
-			currEntry.objName   = result[5]
-			currEntry.reflectType = result[6]
-			currEntry.resourceVersion = result[7]
-			eventEntryList = append(eventEntryList, currEntry)
+
+		if !strings.Contains(currLine, "]"){
+			continue
 		}
+		split1 := strings.Split(currLine, "]")
+		if !strings.HasPrefix(split1[1], " eventTracker,"){
+			continue
+		}
+		result := strings.Split(split1[1], ",")
+		lines = append(lines, currLine)
+		var currEntry eventTrackerEntry
+		currEntry.dataPoint = result[1]
+		currEntry.eventType = result[2]
+		currEntry.namespace = result[3]
+		currEntry.objName   = result[4]
+		currEntry.reflectType = result[5]
+		currEntry.resourceVersion = result[6]
+		currEntry.trackinfo = result[7]
+		currEntry.uid = result[8]
+		eventEntryList = append(eventEntryList, currEntry)
 	}
 	return eventEntryList, lines, scanner.Err()
 }
 
 func getPodsList(apiLogEntries []string) []string {
-	fmt.Printf("\nGeting pods list...")
+	fmt.Printf("\nGetting pods list...")
 	var pods []string
 	for _, line := range apiLogEntries {
 		result := strings.Split(line, ",")
-		eyeCatcher := result[0]
-		if ( eyeCatcher == "eventTracker" ){
-			loc := result[1]
-			objName := result[5]
-			reflectType := result[6]
-			if (loc == "watch_cache/processEvent") && ( reflectType == "*core.Pod"){
-				pods = AppendPodIfMissing(pods, objName)
-			}
+		loc := result[1]
+		objName := result[4]
+		reflectType := result[5]
+		if (loc == "watch_cache/processEvent") && ( reflectType == "*core.Pod") && strings.HasPrefix(objName, "cust-site"){
+			pods = AppendPodIfMissing(pods, objName)
 		}
 	}
 	return pods
@@ -289,7 +245,8 @@ func getPodsList(apiLogEntries []string) []string {
 func fillList4APIServer(entryList []eventTrackerEntry, podName string) {
 	for _, entry := range entryList {
 		// if  strings.Contains(entry.objName, podName) {
-		if  entry.objName == podName{
+		//result := strings.Split(entry.namespace, "-")
+		if  entry.objName == podName {
 			rv, _ := strconv.Atoi(entry.resourceVersion)
 			switch entry.dataPoint {
 			case "etcd3/watcher/transform/curObj", "etcd3/watcher/transform/oldObj":
@@ -319,6 +276,9 @@ func fillList4APIServer(entryList []eventTrackerEntry, podName string) {
 			case "cacher/send2":
 				rvLists[8] = AppendIfMissing(rvLists[8], rv)
 				eventLists[8] = append(eventLists[8], entry)
+			case "watch/ServeHTTP":
+				rvLists[11] = AppendIfMissing(rvLists[11], rv)
+				eventLists[11] = append(eventLists[11], entry)
 			}
 		}
 	}
@@ -327,8 +287,7 @@ func fillList4APIServer(entryList []eventTrackerEntry, podName string) {
 
 func fillList4Client(entryList []eventTrackerEntry, listNum int, podName string) {
 	for _, entry := range entryList {
-		//if  strings.Contains(entry.objName, podName) {
-		if  entry.objName == podName{
+		if  entry.objName == podName {
 			rv, _ := strconv.Atoi(entry.resourceVersion)
 			if strings.HasPrefix(entry.dataPoint, "reflector/watchHandler") {
 				rvLists[listNum] = AppendIfMissing(rvLists[listNum], rv)
@@ -346,7 +305,7 @@ func compareLists(baseNum int, podName string) ([]int, bool) {
 	baseRVList := rvLists[baseNum]
 	baseEventList := eventLists[baseNum]
 	var falseList []int
-	for i := 0; i < 11; i++ {
+	for i := 0; i < 12; i++ {
 		if i == baseNum {
 			continue
 		}
@@ -364,16 +323,23 @@ func compareLists(baseNum int, podName string) ([]int, bool) {
 				if (ecOpts.podName == "all") || (ecOpts.podName == podName) || (ecOpts.podNameHas != "" && strings.Contains(podName, ecOpts.podNameHas)){
 					fmt.Printf("false rv list: ")
 					fmt.Println(falservlist)
-					//fmt.Println(baseRVList)
-					//fmt.Printf("currList %d: \n", i)
-					//fmt.Println(rvLists[i])
 				}
 			case "EVENT":
 				if (ecOpts.podName == "all") || (ecOpts.podName == podName) || (ecOpts.podNameHas != "" && strings.Contains(podName, ecOpts.podNameHas)){
-					//fmt.Printf("false event list: \n")
-					//for _,entry := range falseeventlist {
-					//	entry.Print()
-					//}
+					fmt.Printf("baselist %d: \n", baseNum)
+					for _,entry := range baseEventList {
+						entry.Print()
+					}
+
+					fmt.Printf("currList %d: \n", i)
+					for _,entry := range eventLists[i] {
+						entry.Print()
+					}
+				}
+			case "BOTH":
+				if (ecOpts.podName == "all") || (ecOpts.podName == podName) || (ecOpts.podNameHas != "" && strings.Contains(podName, ecOpts.podNameHas)){
+					fmt.Printf("false rv list: ")
+					fmt.Println(falservlist)
 					fmt.Printf("baselist %d: \n", baseNum)
 					for _,entry := range baseEventList {
 						entry.Print()
@@ -387,14 +353,12 @@ func compareLists(baseNum int, podName string) ([]int, bool) {
 			}
 		}
 	}
-	//fmt.Printf("%s, ", podName)
 	return falseList,isSame
 }
 
 func compareWithBase(baseRVList []int, currRvList []int) (bool, []int){
 	isSame := true
 	var falservlist []int
-	//var falseeventList []eventTrackerEntry
 	bl := len(baseRVList)
 	cl := len(currRvList)
 	if bl != cl {
@@ -425,7 +389,7 @@ func compareWithBase(baseRVList []int, currRvList []int) (bool, []int){
 			for (i == bl) && (j < cl) {
 				isSame = false
 				if ecOpts.eventdiff {
-					fmt.Printf("Event %s is missing in base list but exists in current list\n", currRvList[j])
+					fmt.Printf("Event %d is missing in base list but exists in current list\n", currRvList[j])
 				}
 				falservlist = append(falservlist, currRvList[j])
 				j++
@@ -433,26 +397,22 @@ func compareWithBase(baseRVList []int, currRvList []int) (bool, []int){
 			for (i < bl) && (j == cl) {
 				isSame = false
 				if ecOpts.eventdiff {
-					fmt.Printf("Event %s is missing in current list but exists in base list\n", baseRVList[i])
+					fmt.Printf("Event %d is missing in current list but exists in base list\n", baseRVList[i])
 				}
 				falservlist = append(falservlist, baseRVList[i])
 				i++
 			}
 		} else {
-			for baseRVList[i] != currRvList[j] {
-				//fmt.Printf("i is %d, j is %d, bl is %d, cl is %d\n", i, j, bl, cl)
-				//fmt.Printf("base num is %s, curr num is %s ", baseRVList[i], currRvList[j])
-
-				isSame = false
+			for baseRVList[i] != currRvList[j] {isSame = false
 				if baseRVList[i] < currRvList[j] {
 					if ecOpts.eventdiff {
-						fmt.Printf("Event %s is missing in current list but exists in base list\n", baseRVList[i])
+						fmt.Printf("Event %d is missing in current list but exists in base list\n", baseRVList[i])
 					}
 					falservlist = append(falservlist, baseRVList[i])
 					i++
 				} else {
 					if ecOpts.eventdiff {
-						fmt.Printf("Event %s is missing in base list but exists in current list\n", currRvList[j])
+						fmt.Printf("Event %d is missing in base list but exists in current list\n", currRvList[j])
 					}
 					falservlist = append(falservlist, currRvList[j])
 					j++
@@ -460,7 +420,7 @@ func compareWithBase(baseRVList []int, currRvList []int) (bool, []int){
 				if i == bl {
 					for ;j < cl; j++ {
 						if ecOpts.eventdiff {
-							fmt.Printf("Event %s is missing in base list but exists in current list\n", currRvList[j])
+							fmt.Printf("Event %d is missing in base list but exists in current list\n", currRvList[j])
 						}
 						falservlist = append(falservlist, currRvList[j])
 					}
@@ -469,7 +429,7 @@ func compareWithBase(baseRVList []int, currRvList []int) (bool, []int){
 				if j == cl {
 					for ;i < bl; i++ {
 						if ecOpts.eventdiff {
-							fmt.Printf("Event %s is missing in current list but exists in base list\n", baseRVList[i])
+							fmt.Printf("Event %d is missing in current list but exists in base list\n", baseRVList[i])
 						}
 						falservlist = append(falservlist, baseRVList[i])
 					}
@@ -501,16 +461,14 @@ func AppendPodIfMissing(slice []string, i string) []string {
 	return append(slice, i)
 }
 
-
-
-func AppendEventIfMissing(slice []eventTrackerEntry, rvlist []string , i eventTrackerEntry) []eventTrackerEntry {
-	for _, rv := range rvlist {
-		if rv == i.resourceVersion {
-			return slice
-		}
-	}
-	return append(slice, i)
-}
+//func AppendEventIfMissing(slice []eventTrackerEntry, rvlist []string , i eventTrackerEntry) []eventTrackerEntry {
+//	for _, rv := range rvlist {
+//		if rv == i.resourceVersion {
+//			return slice
+//		}
+//	}
+//	return append(slice, i)
+//}
 
 func listEntry4FalsePod (podName string, apiEventList []eventTrackerEntry){
 	var entries []eventTrackerEntry
@@ -544,73 +502,73 @@ func getNewPodNameList (podNameHas string, falsePodList []string) []string {
 	return newPodList
 }
 
-func printEvents4FalsePods(falsePodList []string, kasEntryList []eventTrackerEntry, schedulerEntryList []eventTrackerEntry, kcmEntryList []eventTrackerEntry){
-	fmt.Println()
-	if ecOpts.podName != "" {
-		fmt.Printf("\n==================================List events for pod %s==================================\n", ecOpts.podName)
-		fmt.Println("\nEvent in apiserver: ")
-		listEntry4FalsePod(ecOpts.podName, kasEntryList)
-		fmt.Println("\nEvent in scheduler: ")
-		listEntry4FalsePod(ecOpts.podName, schedulerEntryList)
-		fmt.Println("\nEvent in controller-manager: ")
-		listEntry4FalsePod(ecOpts.podName, kcmEntryList)
-	} else if ecOpts.podName == "all"{
-		for _, podName := range falsePodList {
-			fmt.Printf("\n==================================List events for pod %s==================================\n", podName)
-			fmt.Println("\nEvent in apiserver: ")
-			listEntry4FalsePod(podName, kasEntryList)
-			fmt.Println("\nEvent in scheduler: ")
-			listEntry4FalsePod(podName, schedulerEntryList)
-			fmt.Println("\nEvent in controller-manager: ")
-			listEntry4FalsePod(podName, kcmEntryList)
-		}
-	} else if ecOpts.podNameHas != "" {
-		newPodLists := getNewPodNameList(ecOpts.podNameHas, falsePodList)
-		for _, podName := range newPodLists {
-			fmt.Printf("\n==================================List events for pod %s==================================\n", podName)
-			fmt.Println("\nEvent in apiserver: ")
-			listEntry4FalsePod(podName, kasEntryList)
-			fmt.Println("\nEvent in scheduler: ")
-			listEntry4FalsePod(podName, schedulerEntryList)
-			fmt.Println("\nEvent in controller-manager: ")
-			listEntry4FalsePod(podName, kcmEntryList)
-		}
-	}
-}
-
-func printRV4FalsePods(falsePodList []string, kasEntryList []eventTrackerEntry, schedulerEntryList []eventTrackerEntry, kcmEntryList []eventTrackerEntry){
-	fmt.Println()
-
-	if ecOpts.podName != "" {
-		fmt.Printf("\n==================================List RV for pod %s==================================\n", ecOpts.podName)
-		fmt.Println("\nEvent in apiserver: ")
-		listRV4FalsePod(ecOpts.podName, kasEntryList)
-		fmt.Println("\nEvent in scheduler: ")
-		listRV4FalsePod(ecOpts.podName, schedulerEntryList)
-		fmt.Println("\nEvent in controller-manager: ")
-		listRV4FalsePod(ecOpts.podName, kcmEntryList)
-	} else if ecOpts.podName == "all"{
-		for _, podName := range falsePodList {
-			fmt.Printf("\n==================================List events for pod %s==================================\n", podName)
-			fmt.Println("\nEvent in apiserver: ")
-			listRV4FalsePod(podName, kasEntryList)
-			fmt.Println("\nEvent in scheduler: ")
-			listRV4FalsePod(podName, schedulerEntryList)
-			fmt.Println("\nEvent in controller-manager: ")
-			listRV4FalsePod(podName, kcmEntryList)
-		}
-	} else if ecOpts.podNameHas != "" {
-		newPodLists := getNewPodNameList(ecOpts.podNameHas, falsePodList)
-		for _, podName := range newPodLists {
-			fmt.Printf("\n==================================List events for pod %s==================================\n", podName)
-			fmt.Println("\nEvent in apiserver: ")
-			listRV4FalsePod(podName, kasEntryList)
-			fmt.Println("\nEvent in scheduler: ")
-			listRV4FalsePod(podName, schedulerEntryList)
-			fmt.Println("\nEvent in controller-manager: ")
-			listRV4FalsePod(podName, kcmEntryList)
-		}
-	}
-}
+//func printEvents4FalsePods(falsePodList []string, kasEntryList []eventTrackerEntry, schedulerEntryList []eventTrackerEntry, kcmEntryList []eventTrackerEntry){
+//	fmt.Println()
+//	if ecOpts.podName != "" {
+//		fmt.Printf("\n==================================List events for pod %s==================================\n", ecOpts.podName)
+//		fmt.Println("\nEvent in apiserver: ")
+//		listEntry4FalsePod(ecOpts.podName, kasEntryList)
+//		fmt.Println("\nEvent in scheduler: ")
+//		listEntry4FalsePod(ecOpts.podName, schedulerEntryList)
+//		fmt.Println("\nEvent in controller-manager: ")
+//		listEntry4FalsePod(ecOpts.podName, kcmEntryList)
+//	} else if ecOpts.podName == "all"{
+//		for _, podName := range falsePodList {
+//			fmt.Printf("\n==================================List events for pod %s==================================\n", podName)
+//			fmt.Println("\nEvent in apiserver: ")
+//			listEntry4FalsePod(podName, kasEntryList)
+//			fmt.Println("\nEvent in scheduler: ")
+//			listEntry4FalsePod(podName, schedulerEntryList)
+//			fmt.Println("\nEvent in controller-manager: ")
+//			listEntry4FalsePod(podName, kcmEntryList)
+//		}
+//	} else if ecOpts.podNameHas != "" {
+//		newPodLists := getNewPodNameList(ecOpts.podNameHas, falsePodList)
+//		for _, podName := range newPodLists {
+//			fmt.Printf("\n==================================List events for pod %s==================================\n", podName)
+//			fmt.Println("\nEvent in apiserver: ")
+//			listEntry4FalsePod(podName, kasEntryList)
+//			fmt.Println("\nEvent in scheduler: ")
+//			listEntry4FalsePod(podName, schedulerEntryList)
+//			fmt.Println("\nEvent in controller-manager: ")
+//			listEntry4FalsePod(podName, kcmEntryList)
+//		}
+//	}
+//}
+//
+//func printRV4FalsePods(falsePodList []string, kasEntryList []eventTrackerEntry, schedulerEntryList []eventTrackerEntry, kcmEntryList []eventTrackerEntry){
+//	fmt.Println()
+//
+//	if ecOpts.podName != "" {
+//		fmt.Printf("\n==================================List RV for pod %s==================================\n", ecOpts.podName)
+//		fmt.Println("\nEvent in apiserver: ")
+//		listRV4FalsePod(ecOpts.podName, kasEntryList)
+//		fmt.Println("\nEvent in scheduler: ")
+//		listRV4FalsePod(ecOpts.podName, schedulerEntryList)
+//		fmt.Println("\nEvent in controller-manager: ")
+//		listRV4FalsePod(ecOpts.podName, kcmEntryList)
+//	} else if ecOpts.podName == "all"{
+//		for _, podName := range falsePodList {
+//			fmt.Printf("\n==================================List events for pod %s==================================\n", podName)
+//			fmt.Println("\nEvent in apiserver: ")
+//			listRV4FalsePod(podName, kasEntryList)
+//			fmt.Println("\nEvent in scheduler: ")
+//			listRV4FalsePod(podName, schedulerEntryList)
+//			fmt.Println("\nEvent in controller-manager: ")
+//			listRV4FalsePod(podName, kcmEntryList)
+//		}
+//	} else if ecOpts.podNameHas != "" {
+//		newPodLists := getNewPodNameList(ecOpts.podNameHas, falsePodList)
+//		for _, podName := range newPodLists {
+//			fmt.Printf("\n==================================List events for pod %s==================================\n", podName)
+//			fmt.Println("\nEvent in apiserver: ")
+//			listRV4FalsePod(podName, kasEntryList)
+//			fmt.Println("\nEvent in scheduler: ")
+//			listRV4FalsePod(podName, schedulerEntryList)
+//			fmt.Println("\nEvent in controller-manager: ")
+//			listRV4FalsePod(podName, kcmEntryList)
+//		}
+//	}
+//}
 
 
