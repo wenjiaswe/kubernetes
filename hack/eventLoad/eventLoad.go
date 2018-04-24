@@ -39,6 +39,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"path/filepath"
@@ -371,10 +372,16 @@ func homeDir() string {
 
 func initClientSet() (*kubernetes.Clientset, error) {
 	// use the current context in kubeconfig
-	fmt.Printf("Building config with %s.\r\n", opts.kubeConfig)
-	config, err := clientcmd.BuildConfigFromFlags("", opts.kubeConfig)
+	var config *rest.Config
+	var err error
+	if opts.kubeConfig != "" {
+		fmt.Printf("Building config with %s.\r\n", opts.kubeConfig)
+		config, err = clientcmd.BuildConfigFromFlags("", opts.kubeConfig)
+	} else {
+		fmt.Printf("Building config using clientcmd.DefaultClientConfig.\r\n")
+		config, err = clientcmd.DefaultClientConfig.ClientConfig()
+	}
 	if err != nil {
-		fmt.Printf("Got error calling clientcmd.BuildConfigFromFlags(\"\", \"%s\")\r\n", opts.kubeConfig)
 		return nil, err
 	}
 
