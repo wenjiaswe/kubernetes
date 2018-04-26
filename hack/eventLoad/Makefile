@@ -51,8 +51,7 @@ build_test: setup bin/eventLoad bin/eventCheck
 push_test: bin/eventLoad bin/eventCheck
 	gcloud compute scp --project "${PROJECT}"  --zone "${ZONE}" ./bin/eventLoad kubernetes-master:/tmp
 	gcloud compute scp --project "${PROJECT}"  --zone "${ZONE}" ./bin/eventCheck kubernetes-master:/tmp
-	gcloud compute scp --project "${PROJECT}"  --zone "${ZONE}" ~/.kube/config kubernetes-master:/tmp/kube.config
-	@echo /tmp/eventLoad --kubeconfig /tmp/kube.config --image ${IMAGE} --concurrentSites 2 --numSites 6 --inCluster=true
+	@echo /tmp/eventLoad --kubeconfig "" --image ${IMAGE} --concurrentSites 2 --numSites 6 --inCluster=true --killList="kube-apiserver,kube-scheduler,kube-controller-manager" --killInterval=180
 
 list_test:
 	@echo Instructions for testing project ${PROJECT}

@@ -43,6 +43,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"path/filepath"
+	"os/exec"
+	"bytes"
+	"io"
+	"crypto/rand"
+	"math/big"
 )
 
 var (
@@ -62,6 +67,8 @@ type eventLoadOpts struct {
 	startInterval int64
 	kubeConfig string
 	image string
+	killList []string
+	killInterval int64
 	tidy bool
 	inCluster bool
 }
@@ -94,6 +101,17 @@ type testSite struct {
 	running bool
 }
 
+type processInfo struct {
+	owner string
+	pid string
+	ppid string
+	cpu string
+	start string
+	terminal string
+	time string
+	command []string
+}
+
 func main() {
 	flags := eventLoadCmd.Flags()
 	flags.IntVar(&opts.numSites, "numSites", 10, "number of sites to create during the test")
@@ -101,6 +119,8 @@ func main() {
 	flags.Int64Var(&opts.startInterval, "startInterval", 30, "seconds between starting customer sites")
 	flags.StringVar(&opts.kubeConfig, "kubeconfig", "", "absolute path to the kubeconfig file")
 	flags.StringVar(&opts.image, "image", "gcr.io/wfender-test/tomcat-amd64:1522278020", "primary docker image")
+	flags.StringSliceVar(&opts.killList, "killList", []string {}, "List of the services which the test should periodically kill")
+	flags.Int64Var(&opts.killInterval, "killInterval", 0, "seconds between killing services")
 	flags.BoolVar(&opts.tidy, "tidy", true, "should we clean up all the sites")
 	flags.BoolVar(&opts.inCluster, "inCluster", false, "should be assume the test is running in cluster")
 	eventLoadCmd.Execute()
@@ -123,6 +143,12 @@ func runEventLoad() {
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
+	}
+	stop := make(chan struct{})
+	if opts.inCluster && len(opts.killList) > 0 && opts.killInterval > 0 {
+		go killServices(stop)
+	} else {
+		fmt.Printf("Skipping the chaos killer function! (%t,%t,%t)\r\n", opts.inCluster, len(opts.killList) > 0, opts.killInterval > 0)
 	}
 
 	testSites := make([]testSite, opts.concurrentSites)
@@ -160,8 +186,114 @@ func runEventLoad() {
 		}
 		testSites[index].running = false
 	}
+	stop <- struct{}{}
 
 	fmt.Println("Test finished")
+}
+
+func killServices(stop chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		time.Sleep(time.Duration(opts.killInterval) * time.Second)
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		index, err := rand.Int(rand.Reader, big.NewInt(int64(len(opts.killList))))
+		if err != nil {
+			fmt.Printf("Failed to pick a service to kill, %v!\r\n", err)
+		}
+		service := opts.killList[int(index.Int64())]
+		fmt.Printf("Going to kill %s at time %v!\r\n", service, time.Now())
+		pinfo, err := getProcessInfo(service)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command("sudo", "kill", pinfo.pid)
+		err = cmd.Run()
+		if err != nil {
+			fmt.Printf("Failed to kill %s(%s) error %v\r\n", service, pinfo.pid, err)
+			continue
+		}
+		fmt.Printf("Killed service %s(%s) at time %v.\r\n", service, pinfo.pid, time.Now())
+	}
+}
+
+func getProcessInfo(service string) (*processInfo, error) {
+	cmd1 := exec.Command("ps", "-ef")
+	cmd2 := exec.Command("egrep", service)
+	cmd3 := exec.Command("egrep", "-v", "grep|eventLoad")
+	r1, w1 := io.Pipe()
+	r2, w2 := io.Pipe()
+	cmd1.Stdout = w1
+	cmd2.Stdin = r1
+	cmd2.Stdout = w2
+	cmd3.Stdin = r2
+	var out bytes.Buffer
+	cmd3.Stdout = &out
+	err := cmd1.Start()
+	if err != nil {
+		fmt.Printf("Failed to kill %s as we could not ps! %v\r\n", service, err)
+		return nil, err
+	}
+	err = cmd2.Start()
+	if err != nil {
+		fmt.Printf("Failed to kill %s as we could not egrep! %v\r\n", service, err)
+		return nil, err
+	}
+	err = cmd3.Start()
+	if err != nil {
+		fmt.Printf("Failed to kill %s as we could not exclude grep! %v\r\n", service, err)
+		return nil, err
+	}
+	err = cmd1.Wait()
+	if err != nil {
+		fmt.Printf("Failed to kill %s as ps failed! %v\r\n", service, err)
+		return nil, err
+	}
+	err = w1.Close()
+	if err != nil {
+		fmt.Printf("Failed to kill %s as pipe close failed! %v\r\n", service, err)
+		return nil, err
+	}
+	err = cmd2.Wait()
+	if err != nil {
+		fmt.Printf("Failed to kill %s as egrep failed! %v\r\n", service, err)
+		return nil, err
+	}
+	err = w2.Close()
+	if err != nil {
+		fmt.Printf("Failed to kill %s as second pipe close failed! %v\r\n", service, err)
+		return nil, err
+	}
+	err = cmd3.Wait()
+	if err != nil {
+		fmt.Printf("Failed to kill %s as exclude grep failed! %v\r\n", service, err)
+		return nil, err
+	}
+	results := strings.Split(out.String(), "\n")
+	if len(results) != 2 {
+		fmt.Printf("Failed to kill %s as we got too many results! %v\r\n", service, results)
+		return nil, errors.New(fmt.Sprintf("Got %d results looking for %s!\r\n", len(results) - 1, service))
+	}
+	r := strings.NewReplacer("    ", " ", "   ", " ", "  ", " ")
+	params := strings.Split(r.Replace(r.Replace(results[0])), " ")
+	result := &processInfo{
+		owner: params[0],
+		pid: params[1],
+		ppid: params[2],
+		cpu: params[3],
+		start: params[4],
+		terminal: params[5],
+		time: params[6],
+		command: params[7:],
+	}
+	return result, nil
 }
 
 func runTestSite(requestChannel chan command, resultChannel chan resultMessage, clientset *kubernetes.Clientset, index int, tidy bool) {
