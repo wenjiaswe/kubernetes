@@ -75,6 +75,8 @@ func createAPIExtensionsConfig(
 	return apiextensionsConfig, nil
 }
 
-func createAPIExtensionsServer(apiextensionsConfig *apiextensionsapiserver.Config, delegateAPIServer genericapiserver.DelegationTarget) (*apiextensionsapiserver.CustomResourceDefinitions, error) {
+func createAPIExtensionsServer(
+	apiextensionsConfig *apiextensionsapiserver.Config,
+	delegateAPIServer genericapiserver.DelegationTarget) (*apiextensionsapiserver.CustomResourceDefinitions, error) {
 	return apiextensionsConfig.Complete().New(delegateAPIServer)
 }

@@ -388,10 +388,14 @@ loop:
 			}
 			meta, err := meta.Accessor(event.Object)
 			if err != nil {
+				glog.Errorf("unexpected et error: %v, %s", err, reflect.TypeOf(event.Object))
 				utilruntime.HandleError(fmt.Errorf("%s: unable to understand watch event %#v", r.name, event))
 				continue
 			}
 			newResourceVersion := meta.GetResourceVersion()
+			// eventTracker Event lost: print out resourceVersion, EventType and event object name
+			glog.Warningf("et,%s,%s,%s,%s,%s,%s(%s),%s\n",
+				event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), newResourceVersion, event.TrackInfo, r.name, meta.GetUID())
 			switch event.Type {
 			case watch.Added:
 				err := r.store.Add(event.Object)
