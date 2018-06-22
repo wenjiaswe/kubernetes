@@ -294,7 +294,7 @@ func fillList4APIServer(entryList []eventTrackerEntry, podName string) {
 			case "cacher.go:928":
 				rvLists[8] = AppendIfMissing(rvLists[8], rv)
 				eventLists[8] = append(eventLists[8], entry)
-			case "watch.go:235":
+			case "watch.go:240":
 				rvLists[11] = AppendIfMissing(rvLists[11], rv)
 				eventLists[11] = append(eventLists[11], entry)
 			}
@@ -312,7 +312,7 @@ func fillList4Client(entryList []eventTrackerEntry, listNum int, podName string)
 		//break
 		if  entry.objName == podName {
 			rv, _ := strconv.Atoi(entry.resourceVersion)
-			if strings.HasPrefix(entry.dataPoint, "reflector.go:402") {
+			if strings.HasPrefix(entry.dataPoint, "reflector.go:400") {
 				rvLists[listNum] = AppendIfMissing(rvLists[listNum], rv)
 				eventLists[listNum] = append(eventLists[listNum], entry)
 			}else{
