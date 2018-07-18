@@ -1455,7 +1455,7 @@ function start-kube-apiserver {
   prepare-log-file "${KUBE_API_SERVER_AUDIT_LOG_PATH:-/var/log/kube-apiserver-audit.log}"
 
   # Calculate variables and assemble the command line.
-  local params="${API_SERVER_TEST_LOG_LEVEL:-"--v=2"} ${APISERVER_TEST_ARGS:-} ${CLOUD_CONFIG_OPT}"
+  local params="${API_SERVER_TEST_LOG_LEVEL:-"--v=3"} ${APISERVER_TEST_ARGS:-} ${CLOUD_CONFIG_OPT}"
   params+=" --address=127.0.0.1"
   params+=" --allow-privileged=true"
   params+=" --cloud-provider=gce"
@@ -1876,7 +1876,7 @@ function start-kube-controller-manager {
   create-kubecontrollermanager-kubeconfig
   prepare-log-file /var/log/kube-controller-manager.log
   # Calculate variables and assemble the command line.
-  local params="${CONTROLLER_MANAGER_TEST_LOG_LEVEL:-"--v=2"} ${CONTROLLER_MANAGER_TEST_ARGS:-} ${CLOUD_CONFIG_OPT}"
+  local params="${CONTROLLER_MANAGER_TEST_LOG_LEVEL:-"--v=3"} ${CONTROLLER_MANAGER_TEST_ARGS:-} ${CLOUD_CONFIG_OPT}"
   params+=" --use-service-account-credentials"
   params+=" --cloud-provider=gce"
   params+=" --kubeconfig=/etc/srv/kubernetes/kube-controller-manager/kubeconfig"
@@ -1973,7 +1973,7 @@ function start-kube-scheduler {
   prepare-log-file /var/log/kube-scheduler.log
 
   # Calculate variables and set them in the manifest.
-  params="${SCHEDULER_TEST_LOG_LEVEL:-"--v=2"} ${SCHEDULER_TEST_ARGS:-}"
+  params="${SCHEDULER_TEST_LOG_LEVEL:-"--v=3"} ${SCHEDULER_TEST_ARGS:-}"
   params+=" --kubeconfig=/etc/srv/kubernetes/kube-scheduler/kubeconfig"
   if [[ -n "${FEATURE_GATES:-}" ]]; then
     params+=" --feature-gates=${FEATURE_GATES}"

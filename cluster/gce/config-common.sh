@@ -42,7 +42,7 @@ function get-master-size {
 # Vars assumed:
 #   NUM_NODES
 function get-master-root-disk-size() {
-  local suggested_master_root_disk_size="20GB"
+  local suggested_master_root_disk_size="50GB"
   if [[ "${NUM_NODES}" -gt "1000" ]]; then
     suggested_master_root_disk_size="50GB"
   fi
@@ -55,7 +55,7 @@ function get-master-root-disk-size() {
 # Vars assumed:
 #   NUM_NODES
 function get-master-disk-size() {
-  local suggested_master_disk_size="20GB"
+  local suggested_master_disk_size="50GB"
   if [[ "${NUM_NODES}" -gt "1000" ]]; then
     suggested_master_disk_size="100GB"
   fi
