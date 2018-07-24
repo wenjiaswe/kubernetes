@@ -23,7 +23,7 @@ source "${KUBE_ROOT}/cluster/gce/config-common.sh"
 # This endpoint has to be pointing to v1 api. For example, https://www.googleapis.com/compute/staging_v1/
 GCE_API_ENDPOINT=${KUBE_GCE_API_ENDPOINT:-}
 GCLOUD=gcloud
-ZONE=${KUBE_GCE_ZONE:-us-central1-b}
+ZONE=${KUBE_GCE_ZONE:-us-east1-b}
 REGION=${ZONE%-*}
 RELEASE_REGION_FALLBACK=${RELEASE_REGION_FALLBACK:-false}
 REGIONAL_KUBE_ADDONS=${REGIONAL_KUBE_ADDONS:-true}
