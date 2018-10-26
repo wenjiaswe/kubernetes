@@ -41,6 +41,8 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utiltrace "k8s.io/apiserver/pkg/util/trace"
 	"k8s.io/client-go/tools/cache"
+	"os"
+	"strconv"
 )
 
 // Config contains the configuration for a given Cache.
@@ -614,6 +616,16 @@ func (c *Cacher) dispatchEvent(event *watchCacheEvent) {
 
 	c.Lock()
 	defer c.Unlock()
+
+	// eventTracker Event lost: print out resourceVersion, EventType and event object name
+	meta, err := meta.Accessor(event.Object)
+	if err != nil {
+		glog.Warningf("unexpected et error: %v, %s", err, reflect.TypeOf(event.Object))
+	} else {
+		glog.Warningf("et,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
+	}
+
 	// Iterate over "allWatchers" no matter what the trigger function is.
 	for _, watcher := range c.watchers.allWatchers {
 		watcher.add(event, c.dispatchTimeoutBudget)
@@ -824,9 +836,20 @@ func (c *cacheWatcher) stop() {
 var timerPool sync.Pool
 
 func (c *cacheWatcher) add(event *watchCacheEvent, budget *timeBudget) {
+	// eventTracker Event lost: print out resourceVersion, EventType and event object name
+	meta, err := meta.Accessor(event.Object)
+	if err != nil {
+		glog.Warningf("unexpected et error: %v, %s", err, reflect.TypeOf(event.Object))
+	}else{
+		glog.Warningf("et,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
+	}
+
 	// Try to send the event immediately, without blocking.
 	select {
 	case c.input <- event:
+		glog.Warningf("et,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
 		return
 	default:
 	}
@@ -847,6 +870,9 @@ func (c *cacheWatcher) add(event *watchCacheEvent, budget *timeBudget) {
 
 	select {
 	case c.input <- event:
+		// eventTracker Event lost: print out resourceVersion, EventType and event object name
+		glog.Warningf("et,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
 		stopped := t.Stop()
 		if !stopped {
 			// Consume triggered (but not yet received) timer event
@@ -857,6 +883,9 @@ func (c *cacheWatcher) add(event *watchCacheEvent, budget *timeBudget) {
 		// This means that we couldn't send event to that watcher.
 		// Since we don't want to block on it infinitely,
 		// we simply terminate it.
+		// eventTracker Event lost: print out resourceVersion, EventType and event object name
+		glog.Warningf("et,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
 		c.forget(false)
 		c.stop()
 	}
@@ -866,6 +895,11 @@ func (c *cacheWatcher) add(event *watchCacheEvent, budget *timeBudget) {
 
 // NOTE: sendWatchCacheEvent is assumed to not modify <event> !!!
 func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
+	// eventTracker Event lost: print out resourceVersion, EventType and event object name
+	meta, err := meta.Accessor(event.Object)
+	if err != nil {
+		glog.Warningf("unexpected et error: %v, %s", err, reflect.TypeOf(event.Object))
+	}
 	curObjPasses := event.Type != watch.Deleted && c.filter(event.Key, event.ObjLabels, event.ObjFields, event.ObjUninitialized)
 	oldObjPasses := false
 	if event.PrevObject != nil {
@@ -873,6 +907,8 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 	}
 	if !curObjPasses && !oldObjPasses {
 		// Watcher is not interested in that object.
+		glog.Warningf("et,%s,%s,%s,%s,%s,%s,%s\n",
+			event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo,meta.GetUID())
 		return
 	}
 
@@ -890,6 +926,9 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 		}
 		watchEvent = watch.Event{Type: watch.Deleted, Object: oldObj}
 	}
+
+	glog.Warningf("et,%s,%s,%s,%s,%s,%s,%s\n",
+		event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo,meta.GetUID())
 
 	// We need to ensure that if we put event X to the c.result, all
 	// previous events were already put into it before, no matter whether
@@ -909,6 +948,8 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 	default:
 	}
 
+	// Append event code path into event track info
+	watchEvent.TrackInfo = event.TrackInfo + "cacher/sendWatchCacheEvent" + time.Now().Format(time.RFC3339Nano) + "p" + strconv.Itoa(os.Getpid())
 	select {
 	case c.result <- watchEvent:
 	case <-c.done:
@@ -934,6 +975,14 @@ func (c *cacheWatcher) process(initEvents []*watchCacheEvent, resourceVersion ui
 	const initProcessThreshold = 500 * time.Millisecond
 	startTime := time.Now()
 	for _, event := range initEvents {
+		// eventTracker Event lost: print out resourceVersion, EventType and event object name
+		meta, err := meta.Accessor(event.Object)
+		if err != nil {
+			glog.Warningf("unexpected et error: %v, %s", err, reflect.TypeOf(event.Object))
+		}else {
+			glog.Warningf("et,%s,%s,%s,%s,%s,%s,%s\n",
+				event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo, meta.GetUID())
+		}
 		c.sendWatchCacheEvent(event)
 	}
 	processingTime := time.Since(startTime)
@@ -954,6 +1003,14 @@ func (c *cacheWatcher) process(initEvents []*watchCacheEvent, resourceVersion ui
 		}
 		// only send events newer than resourceVersion
 		if event.ResourceVersion > resourceVersion {
+			// eventTracker Event lost: print out resourceVersion, EventType and event object name
+			meta, err := meta.Accessor(event.Object)
+			if err != nil {
+				glog.Warningf("unexpected et error: %v, %s", err, reflect.TypeOf(event.Object))
+			}else{
+				glog.Warningf("et,%s,%s,%s,%s,%s,%s,%s\n",
+					event.Type, meta.GetNamespace(), meta.GetName(), reflect.TypeOf(event.Object), meta.GetResourceVersion(), event.TrackInfo,meta.GetUID())
+			}
 			c.sendWatchCacheEvent(event)
 		}
 	}
