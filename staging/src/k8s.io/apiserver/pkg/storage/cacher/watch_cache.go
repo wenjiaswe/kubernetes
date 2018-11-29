@@ -29,12 +29,12 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/storage"
 	utiltrace "k8s.io/apiserver/pkg/util/trace"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
@@ -207,7 +207,7 @@ func (w *watchCache) Delete(obj interface{}) error {
 		return err
 	}
 	//event := watch.Event{Type: watch.Deleted, Object: object}
-	event := watch.Event{Type: watch.Modified, Object: object, TrackInfo: "watch_cache/Delete;"}
+	event := watch.Event{Type: watch.Deleted, Object: object, TrackInfo: "watch_cache/Delete;"}
 
 	f := func(elem *storeElement) error { return w.store.Delete(elem) }
 	return w.processEvent(event, resourceVersion, namespace, name, uid, f)
